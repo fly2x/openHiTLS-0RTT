@@ -1491,3 +1491,82 @@ EXIT:
     QuicTlsTestPairFree(&pair);
 }
 /* END_CASE */
+
+/**
+ * @test SDV_TLS_QUIC_INTERACTION_EARLY_DATA_FUNC_TC001
+ * @title Deliver 0-RTT secrets at the EARLY_DATA level during a QUIC resumption
+ * @precon Both QUIC endpoints enable early data; the client holds a ticket advertising 0xffffffff
+ * @brief Complete a first handshake, consume the tickets, resume with the stored session and
+ *        inspect the secret callbacks and encryption levels of the 0-RTT handshake.
+ * @expect The ticket advertises HITLS_QUIC_MAX_EARLY_DATA_REQUIRED; on resumption the client
+ *         receives the EARLY_DATA write secret and the server the matching read secret without
+ *         the CRYPTO levels leaving their normal progression; both sides report
+ *         HITLS_EARLY_DATA_ACCEPTED and finish at the APPLICATION level.
+ */
+/* BEGIN_CASE */
+void SDV_TLS_QUIC_INTERACTION_EARLY_DATA_FUNC_TC001(void)
+{
+    QuicTlsTestPair pair = {0};
+    HITLS_Session *session = NULL;
+    uint32_t failedSide = QUIC_TEST_SIDE_NONE;
+    uint32_t status = HITLS_EARLY_DATA_NOT_SENT;
+    uint32_t sessMax = 0u;
+    uint8_t ticketKey[128] = {0};
+    uint32_t ticketKeyLen = 0u;
+
+    FRAME_Init();
+    ASSERT_EQ(QuicTlsTestPairNew(&pair, g_quicTestP256, 1u, g_quicTestP256, 1u, true, true),
+        HITLS_SUCCESS);
+    ASSERT_EQ(HITLS_QUIC_TLS_SetEarlyDataEnabled(pair.clientLink->ssl, true), HITLS_SUCCESS);
+    ASSERT_EQ(HITLS_QUIC_TLS_SetEarlyDataEnabled(pair.serverLink->ssl, true), HITLS_SUCCESS);
+    ASSERT_EQ(QuicTlsTestRunHandshake(&pair, SIZE_MAX, &failedSide), HITLS_SUCCESS);
+    ASSERT_EQ(failedSide, QUIC_TEST_SIDE_NONE);
+    /* Deliver the NewSessionTickets so the stored session carries the 0-RTT permission */
+    while (pair.serverEndpoint.output[HITLS_QUIC_TLS_ENCRYPTION_LEVEL_APPLICATION].len != 0u) {
+        ASSERT_EQ(QuicTlsTestTransferCurrentLevel(&pair.serverEndpoint, pair.clientLink->ssl, SIZE_MAX),
+            HITLS_SUCCESS);
+    }
+    ASSERT_EQ(HITLS_QUIC_TLS_ProcessPostHandshake(pair.clientLink->ssl), HITLS_SUCCESS);
+    session = HITLS_GetDupSession(pair.clientLink->ssl);
+    ASSERT_TRUE(session != NULL);
+    ASSERT_EQ(HITLS_SESS_GetMaxEarlyData(session, &sessMax), HITLS_SUCCESS);
+    ASSERT_EQ(sessMax, HITLS_QUIC_MAX_EARLY_DATA_REQUIRED);
+    /* The resumption server must decrypt this server's ticket: carry the ticket key over */
+    ASSERT_EQ(HITLS_GetSessionTicketKey(pair.serverLink->ssl, ticketKey, sizeof(ticketKey), &ticketKeyLen),
+        HITLS_SUCCESS);
+    QuicTlsTestPairFree(&pair);
+
+    /* Resume with 0-RTT */
+    ASSERT_EQ(QuicTlsTestPairNew(&pair, g_quicTestP256, 1u, g_quicTestP256, 1u, true, true),
+        HITLS_SUCCESS);
+    ASSERT_EQ(HITLS_QUIC_TLS_SetEarlyDataEnabled(pair.clientLink->ssl, true), HITLS_SUCCESS);
+    ASSERT_EQ(HITLS_QUIC_TLS_SetEarlyDataEnabled(pair.serverLink->ssl, true), HITLS_SUCCESS);
+    ASSERT_EQ(HITLS_SetSessionTicketKey(pair.serverLink->ssl, ticketKey, ticketKeyLen), HITLS_SUCCESS);
+    ASSERT_EQ(HITLS_SetSession(pair.clientLink->ssl, session), HITLS_SUCCESS);
+    ASSERT_EQ(QuicTlsTestRunHandshake(&pair, SIZE_MAX, &failedSide), HITLS_SUCCESS);
+    ASSERT_EQ(failedSide, QUIC_TEST_SIDE_NONE);
+
+    /* The EARLY_DATA secrets were delivered on both sides and match */
+    ASSERT_TRUE(QuicTlsTestSecretsMatch(&pair.clientEndpoint, &pair.serverEndpoint,
+        HITLS_QUIC_TLS_ENCRYPTION_LEVEL_EARLY_DATA));
+    ASSERT_EQ(pair.clientEndpoint.writeSecretCount, 3u); /* early data, handshake, application */
+    ASSERT_EQ(pair.serverEndpoint.readSecretCount, 3u);
+    ASSERT_EQ(pair.clientEndpoint.readSecretCount, 2u);  /* handshake, application */
+    ASSERT_EQ(pair.serverEndpoint.writeSecretCount, 2u);
+
+    ASSERT_EQ(HITLS_GetEarlyDataStatus(pair.clientLink->ssl, &status), HITLS_SUCCESS);
+    ASSERT_EQ(status, HITLS_EARLY_DATA_ACCEPTED);
+    ASSERT_EQ(HITLS_GetEarlyDataStatus(pair.serverLink->ssl, &status), HITLS_SUCCESS);
+    ASSERT_EQ(status, HITLS_EARLY_DATA_ACCEPTED);
+
+    /* Early-data delivery must not disturb the CRYPTO level progression */
+    ASSERT_EQ(HITLS_QUIC_TLS_GetReadLevel(pair.serverLink->ssl), HITLS_QUIC_TLS_ENCRYPTION_LEVEL_APPLICATION);
+    ASSERT_EQ(HITLS_QUIC_TLS_GetWriteLevel(pair.clientLink->ssl), HITLS_QUIC_TLS_ENCRYPTION_LEVEL_APPLICATION);
+    ASSERT_EQ(pair.clientEndpoint.alertCount, 0u);
+    ASSERT_EQ(pair.serverEndpoint.alertCount, 0u);
+
+EXIT:
+    HITLS_SESS_Free(session);
+    QuicTlsTestPairFree(&pair);
+}
+/* END_CASE */
