@@ -514,6 +514,7 @@
 #cmakedefine HITLS_TLS_FEATURE_CUSTOM_REC_TYPE
 #cmakedefine HITLS_TLS_FEATURE_DTLS_CID
 #cmakedefine HITLS_TLS_FEATURE_QUIC_TLS
+#cmakedefine HITLS_TLS_FEATURE_EARLY_DATA
 
 // TLS Proto Module
 #cmakedefine HITLS_TLS_PROTO

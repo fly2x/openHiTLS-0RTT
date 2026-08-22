@@ -29,6 +29,10 @@
 #include "hs_msg.h"
 #include "hs_verify.h"
 #include "alpn.h"
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+#include <string.h>
+#include "session.h"
+#endif
 #ifdef HITLS_TLS_FEATURE_QUIC_TLS
 #include "quic_tls_internal.h"
 #endif
@@ -112,6 +116,60 @@ static int32_t Tls13ClientCheckNegotiatedAlpn(TLS_Ctx *ctx, const EncryptedExten
 }
 #endif
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+static int32_t Tls13ClientCheckEarlyData(TLS_Ctx *ctx, const EncryptedExtensions *eEMsg)
+{
+    if (!eEMsg->haveEarlyData) {
+        /* No confirmation: the 0-RTT offer, if any, was rejected */
+        if (ctx->earlyDataState == TLS_EARLY_DATA_SENDING) {
+            ctx->earlyDataState = TLS_EARLY_DATA_REJECTED;
+            /* A staged early record still flushes with the next flight (the server skips it);
+             * only the write-retry bookkeeping must not outlive the phase. */
+            REC_ClearPendingAppData(ctx);
+        }
+        return HITLS_SUCCESS;
+    }
+
+    /* HS_CheckReceivedExtension already rejects early_data that was never offered; on top of that
+     * rfc 8446 4.2.10 requires the server to have selected the first offered PSK and its cipher suite */
+    PskInfo13 *pskInfo = &ctx->hsCtx->kxCtx->pskInfo13;
+    uint16_t sessCipherSuite = 0;
+    if (ctx->earlyDataState != TLS_EARLY_DATA_SENDING || !ctx->negotiatedInfo.isResume ||
+        pskInfo->selectIndex != 0 || pskInfo->resumeSession == NULL) {
+        BSL_ERR_PUSH_ERROR(HITLS_MSG_HANDLE_ILLEGAL_EARLY_DATA);
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15184, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "server confirmed early_data without selecting the first offered PSK.", 0, 0, 0, 0);
+        ctx->method.sendAlert(ctx, ALERT_LEVEL_FATAL, ALERT_ILLEGAL_PARAMETER);
+        return HITLS_MSG_HANDLE_ILLEGAL_EARLY_DATA;
+    }
+    (void)HITLS_SESS_GetCipherSuite(pskInfo->resumeSession, &sessCipherSuite);
+    if (sessCipherSuite != ctx->negotiatedInfo.cipherSuiteInfo.cipherSuite) {
+        BSL_ERR_PUSH_ERROR(HITLS_MSG_HANDLE_ILLEGAL_EARLY_DATA);
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15184, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "server confirmed early_data with a different cipher suite.", 0, 0, 0, 0);
+        ctx->method.sendAlert(ctx, ALERT_LEVEL_FATAL, ALERT_ILLEGAL_PARAMETER);
+        return HITLS_MSG_HANDLE_ILLEGAL_EARLY_DATA;
+    }
+
+    /* rfc 8446 4.2.10: the selected ALPN protocol must match the one of the original connection */
+    const uint8_t *sessAlpn = NULL;
+    uint32_t sessAlpnSize = 0;
+    (void)SESS_GetAlpnSelected(pskInfo->resumeSession, &sessAlpn, &sessAlpnSize);
+    if (sessAlpnSize != ctx->negotiatedInfo.alpnSelectedSize ||
+        (sessAlpnSize != 0 && memcmp(sessAlpn, ctx->negotiatedInfo.alpnSelected, sessAlpnSize) != 0)) {
+        BSL_ERR_PUSH_ERROR(HITLS_MSG_HANDLE_ILLEGAL_EARLY_DATA);
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15184, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "server confirmed early_data with a different ALPN protocol.", 0, 0, 0, 0);
+        ctx->method.sendAlert(ctx, ALERT_LEVEL_FATAL, ALERT_ILLEGAL_PARAMETER);
+        return HITLS_MSG_HANDLE_ILLEGAL_EARLY_DATA;
+    }
+
+    ctx->earlyDataState = TLS_EARLY_DATA_ACCEPTED;
+    ctx->hsCtx->earlyDataAccepted = true;
+    return HITLS_SUCCESS;
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 static int32_t ClientCheckEncryptedExtensionsFlag(TLS_Ctx *ctx, const EncryptedExtensions *eEMsg)
 {
     static const CheckEncryptedExtFunc EXT_INFO_LIST[] = {
@@ -123,6 +181,9 @@ static int32_t ClientCheckEncryptedExtensionsFlag(TLS_Ctx *ctx, const EncryptedE
 #endif
 #ifdef HITLS_TLS_FEATURE_ALPN
         Tls13ClientCheckNegotiatedAlpn,
+#endif
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+        Tls13ClientCheckEarlyData,
 #endif
         NULL,
     };

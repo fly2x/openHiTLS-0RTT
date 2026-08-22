@@ -286,6 +286,54 @@ int32_t REC_GetMaxDataMtu(const TLS_Ctx *ctx, uint32_t *len);
  */
 int32_t REC_TLS13InitPendingState(const TLS_Ctx *ctx, const REC_SecParameters *param, bool isOut);
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+/**
+ * @ingroup record
+ * @brief   0-RTT: replace the current write state with a fresh plaintext state.
+ *          Used by a client whose early data was implicitly rejected by a HelloRetryRequest:
+ *          the second ClientHello must go out unprotected (DTLS 1.3: epoch 0).
+ *
+ * @param   ctx [IN] TLS object
+ *
+ * @retval  HITLS_SUCCESS
+ * @retval  HITLS_MEMALLOC_FAIL Memory allocated failed
+ */
+int32_t REC_TLS13RestorePlaintextWriteState(TLS_Ctx *ctx);
+
+/**
+ * @ingroup record
+ * @brief   0-RTT: arm the reject-skip mode. While armed, an APP record that fails deprotection is
+ *          silently discarded (up to maxSkipBytes of ciphertext), per RFC 8446 4.2.10. The mode
+ *          disarms itself on the first successfully deprotected record.
+ *
+ * @param   ctx [IN] TLS object
+ * @param   maxSkipBytes [IN] Total ciphertext byte allowance for skipped early data
+ */
+void REC_EarlyDataSkipArm(TLS_Ctx *ctx, uint32_t maxSkipBytes);
+
+/**
+ * @ingroup record
+ * @brief   0-RTT: drop the app-write retry bookkeeping of the early-data phase. Called when the
+ *          phase closes (EndOfEarlyData sent, rejection processed) so an interrupted
+ *          HITLS_WriteEarlyData the application never retried cannot poison later writes.
+ *
+ * @param   ctx [IN] TLS object
+ */
+void REC_ClearPendingAppData(TLS_Ctx *ctx);
+
+#ifdef HITLS_TLS_PROTO_DTLS13
+/**
+ * @ingroup record
+ * @brief   0-RTT: mark whether the NEXT pending-state activation installs the DTLS 1.3
+ *          early-data epoch (epoch 1) instead of the handshake epoch.
+ *
+ * @param   ctx [IN] TLS object
+ * @param   isEarly [IN] true: next activation is epoch 1
+ */
+void REC_Dtls13SetEarlyDataEpoch(TLS_Ctx *ctx, bool isEarly);
+#endif
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 /**
  * @brief   Add the message to the retransmission queue
  *

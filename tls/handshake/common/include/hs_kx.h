@@ -227,6 +227,23 @@ int32_t HS_TLS13DeriveFinishedKey(HITLS_Lib_Ctx *libCtx, const char *attrName,
  */
 int32_t HS_SwitchTrafficKey(TLS_Ctx *ctx, uint8_t *secret, uint32_t secretLen, bool isOut);
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+/**
+ * @brief TLS1.3 0-RTT: derive early_secret and client_early_traffic_secret ("c e traffic").
+ *        The transcript covers the ClientHello only (the cached handshake messages at the call point).
+ *        The result is stored in hsCtx->earlySecret / hsCtx->earlyTrafficSecret.
+ *
+ * @param ctx [IN] TLS context (negotiatedInfo.cipherSuiteInfo must reflect the PSK's cipher suite)
+ * @param psk [IN] The offered/selected resumption PSK (not cleansed by this function)
+ * @param pskLen [IN] PSK length
+ *
+ * @retval HITLS_SUCCESS succeeded.
+ * @retval HITLS_CRYPT_ERR_DIGEST hash calculation failed.
+ * @retval HITLS_CRYPT_ERR_HKDF_EXPAND HKDF-Expand calculation fails.
+ */
+int32_t HS_TLS13DeriveClientEarlyTrafficSecret(TLS_Ctx *ctx, uint8_t *psk, uint32_t pskLen);
+#endif
+
 /**
  * @brief Set parameters for initializing the panding state of the record layer.
  *

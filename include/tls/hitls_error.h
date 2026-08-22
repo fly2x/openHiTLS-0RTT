@@ -140,6 +140,8 @@ typedef enum {
                                                         Do not perform other operations, such as read and write. */
     HITLS_CM_LINK_UNSUPPORT_SECURE_RENEGOTIATION,  /**< The current link Unsupported security renegotiation. */
     HITLS_CM_LINK_HANDSHAKING,                     /**< Link is handshaking, can not set config */
+    HITLS_READ_EARLY_DATA_FINISH,                  /**< 0-RTT: the peer finished sending early data; not an error.
+                                                        Complete the handshake and use HITLS_Read afterwards. */
 
     HITLS_MSG_HANDLE_FAIL_START = 0x02040001,      /**< Start bit of the error code processed by the state machine. */
     HITLS_MSG_HANDLE_UNEXPECTED_MESSAGE,           /**< receives unexpected handshake messages. */
@@ -204,6 +206,9 @@ typedef enum {
     HITLS_MSG_HANDLE_DTLS_RETRANSMIT_NOT_TIMEOUT,
     HITLS_MSG_HANDLE_ERR_WITHOUT_TIMEOUT_ACTION,
     HITLS_MSG_HANDLE_ERR_TIMEOUT_REWIND,
+    HITLS_MSG_HANDLE_ILLEGAL_EARLY_DATA,            /**< TLS1.3 0-RTT: illegal early_data negotiation state. */
+    HITLS_MSG_HANDLE_EARLY_DATA_LIMIT_EXCEEDED,     /**< TLS1.3 0-RTT: early data exceeds max_early_data_size. */
+    HITLS_MSG_HANDLE_EARLY_DATA_NOT_ALLOWED,        /**< TLS1.3 0-RTT: early data API used in an invalid state. */
 
     HITLS_PACK_FAIL_START = 0x02050001,             /**< Start bit of the pack error code. */
     HITLS_PACK_UNSUPPORT_VERSION,                   /**< Unsupported version. */

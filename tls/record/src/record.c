@@ -731,19 +731,34 @@ int32_t REC_ActivePendingState(TLS_Ctx *ctx, bool isOut)
     states->currentState = states->pendingState;
     states->pendingState = NULL;
     RecConnSetSeqNum(states->currentState, 0);
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    if (isOut) {
+        /* A record still sitting in the out-buffer was encrypted by the retired state; flushing
+         * it later must not advance the new state's sequence number */
+        recordCtx->outBufSeqBump = false;
+    }
+#endif
 
 #if defined(HITLS_TLS_PROTO_DATAGRAM)
     if (IS_SUPPORT_DATAGRAM(ctx->config.tlsConfig.originVersionMask)) {
+#if defined(HITLS_TLS_FEATURE_EARLY_DATA) && defined(HITLS_TLS_PROTO_DTLS13)
+        /* RFC 9147: epoch 1 carries 0-RTT data; the first activation jumps 0->2 only
+         * when no early-data epoch was requested. Epoch 1 then increments naturally to 2. */
+        uint16_t dtls13FirstEpoch = recordCtx->nextActivationEarlyData ? 1 : 2;
+        recordCtx->nextActivationEarlyData = false;
+#else
+        uint16_t dtls13FirstEpoch = 2;
+#endif
         if (isOut) {
-            if (ctx->negotiatedInfo.version == HITLS_VERSION_DTLS13 && recordCtx->writeEpoch == 0) {
-                recordCtx->writeEpoch = 2;
+            if (IS_DTLS13_CTX(ctx) && recordCtx->writeEpoch == 0) {
+                recordCtx->writeEpoch = dtls13FirstEpoch;
             } else {
                 ++recordCtx->writeEpoch;
             }
             RecConnSetEpoch(states->currentState, recordCtx->writeEpoch);
         } else {
-            if (ctx->negotiatedInfo.version == HITLS_VERSION_DTLS13 && recordCtx->readEpoch == 0) {
-                recordCtx->readEpoch = 2;
+            if (IS_DTLS13_CTX(ctx) && recordCtx->readEpoch == 0) {
+                recordCtx->readEpoch = dtls13FirstEpoch;
             } else {
                 ++recordCtx->readEpoch;
             }
@@ -759,6 +774,69 @@ int32_t REC_ActivePendingState(TLS_Ctx *ctx, bool isOut)
         "Record: active pending state.", 0, 0, 0, 0);
     return HITLS_SUCCESS;
 }
+
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+int32_t REC_TLS13RestorePlaintextWriteState(TLS_Ctx *ctx)
+{
+    if (ctx == NULL || ctx->recCtx == NULL) {
+        BSL_ERR_PUSH_ERROR(HITLS_INTERNAL_EXCEPTION);
+        return HITLS_INTERNAL_EXCEPTION;
+    }
+    RecCtx *recordCtx = (RecCtx *)ctx->recCtx;
+
+    RecConnState *state = RecConnStateNew();
+    if (state == NULL) {
+        BSL_ERR_PUSH_ERROR(HITLS_MEMALLOC_FAIL);
+        return HITLS_MEMALLOC_FAIL;
+    }
+
+    RecConnStateFree(recordCtx->writeStates.outdatedState);
+    recordCtx->writeStates.outdatedState = NULL;
+    RecConnStateFree(recordCtx->writeStates.currentState);
+    recordCtx->writeStates.currentState = state;
+    recordCtx->outBufSeqBump = false;
+#if defined(HITLS_TLS_PROTO_DATAGRAM)
+    if (IS_SUPPORT_DATAGRAM(ctx->config.tlsConfig.originVersionMask)) {
+        recordCtx->writeEpoch = 0;
+        RecConnSetEpoch(state, 0);
+    }
+#endif
+    return HITLS_SUCCESS;
+}
+
+void REC_EarlyDataSkipArm(TLS_Ctx *ctx, uint32_t maxSkipBytes)
+{
+    if (ctx == NULL || ctx->recCtx == NULL) {
+        return;
+    }
+    RecCtx *recordCtx = (RecCtx *)ctx->recCtx;
+    recordCtx->earlyDataSkipArmed = true;
+    recordCtx->earlyDataSkipBytes = maxSkipBytes;
+}
+
+void REC_ClearPendingAppData(TLS_Ctx *ctx)
+{
+    if (ctx == NULL || ctx->recCtx == NULL) {
+        return;
+    }
+    RecCtx *recordCtx = (RecCtx *)ctx->recCtx;
+    recordCtx->pendingData = NULL;
+    recordCtx->pendingDataSize = 0;
+    recordCtx->pendingRecordType = 0;
+    ctx->earlyPendingData = NULL;
+    ctx->earlyPendingLen = 0;
+}
+
+#ifdef HITLS_TLS_PROTO_DTLS13
+void REC_Dtls13SetEarlyDataEpoch(TLS_Ctx *ctx, bool isEarly)
+{
+    if (ctx == NULL || ctx->recCtx == NULL) {
+        return;
+    }
+    ((RecCtx *)ctx->recCtx)->nextActivationEarlyData = isEarly;
+}
+#endif
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
 
 static uint32_t REC_GetRecordSizeLimitWriteLen(const TLS_Ctx *ctx)
 {

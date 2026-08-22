@@ -41,6 +41,9 @@
 #include "hs_extensions.h"
 #include "hs_verify.h"
 #include "hs_cert.h"
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+#include "hs_kx.h"
+#endif
 #include "record.h"
 #include "hs_cookie.h"
 #include "dtls_cid.h"
@@ -2588,6 +2591,142 @@ static int32_t UpdateServerBaseKeyExMode(TLS_Ctx *ctx)
     return HITLS_SUCCESS;
 }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+/* Freshness window for the obfuscated_ticket_age check (RFC 8446 8.2/8.3), in milliseconds.
+ * The system clock used for tickets has one-second granularity, so allow a generous margin
+ * that still bounds the replay window. */
+#define TLS13_EARLY_DATA_AGE_WINDOW_MS 10000u
+
+static bool Tls13ServerCheckTicketAge(TLS_Ctx *ctx, const ClientHelloMsg *clientHello)
+{
+    const PreSharedKey *selected = NULL;
+    ListHead *node = NULL;
+    ListHead *tmpNode = NULL;
+    PreSharedKey *offeredPsks = clientHello->extension.content.preSharedKey;
+    LIST_FOR_EACH_ITEM_SAFE(node, tmpNode, &(offeredPsks->pskNode)) {
+        PreSharedKey *cur = BSL_LIST_ENTRY(node, PreSharedKey, pskNode);
+        if (cur->isValid) {
+            selected = cur;
+            break;
+        }
+    }
+    if (selected == NULL) {
+        return false;
+    }
+
+    uint64_t curTime = (uint64_t)BSL_SAL_CurrentSysTimeGet();
+    uint64_t startTime = SESS_GetStartTime(ctx->session);
+    if (curTime < startTime) {
+        return false;
+    }
+    /* client_age = obfuscated_ticket_age - ticket_age_add (mod 2^32), in milliseconds */
+    uint32_t clientAgeMs = selected->obfuscatedTicketAge - SESS_GetTicketAgeAdd(ctx->session);
+    uint64_t serverAgeMs = (curTime - startTime) * 1000u;
+    uint64_t diff = (serverAgeMs > clientAgeMs) ? (serverAgeMs - clientAgeMs) : ((uint64_t)clientAgeMs - serverAgeMs);
+    return diff <= TLS13_EARLY_DATA_AGE_WINDOW_MS;
+}
+
+/*
+ * The 0-RTT offer is not honored. Over stream TLS the client may already have early-data
+ * records in flight, so arm the record-layer skip mode (RFC 8446 4.2.10): undecryptable APP
+ * records are discarded up to a bounded allowance. DTLS 1.3 drops unknown-epoch records on
+ * its own and the QUIC stack discards its own 0-RTT packets.
+ */
+static void Tls13ServerRejectEarlyData(TLS_Ctx *ctx)
+{
+    ctx->hsCtx->earlyDataOffered = true;
+    if (ctx->earlyDataState == TLS_EARLY_DATA_NOT_SENT) {
+        ctx->earlyDataState = TLS_EARLY_DATA_REJECTED;
+    }
+    if (IS_SUPPORT_DATAGRAM(ctx->config.tlsConfig.originVersionMask)
+#ifdef HITLS_TLS_FEATURE_QUIC_TLS
+        || QUIC_TLS_IsMode(ctx)
+#endif
+    ) {
+        return;
+    }
+    /* The allowance is the advertised max_early_data_size (or the local config / a sane floor
+     * when no ticket resolved) plus slack for record overhead. A flood of pathologically tiny
+     * records can exhaust the allowance early and terminates the handshake, which bounds the
+     * work an attacker can force. */
+    uint32_t limit = 0;
+    if (ctx->session != NULL) {
+        limit = SESS_GetMaxEarlyData(ctx->session);
+    }
+    if (limit == 0) {
+        limit = ctx->config.tlsConfig.maxEarlyDataSize;
+    }
+    if (limit == 0) {
+        limit = REC_MAX_PLAIN_LENGTH;
+    }
+    uint32_t allowance = (limit > UINT32_MAX / 2) ? UINT32_MAX : (limit * 2 + REC_MAX_PLAIN_LENGTH);
+    REC_EarlyDataSkipArm(ctx, allowance);
+}
+
+/*
+ * RFC 8446 4.2.10: accept early data only when the first offered PSK was selected via a ticket
+ * and the TLS version, cipher suite and ALPN protocol equal those of the original connection.
+ * On acceptance derive client_early_traffic_secret and activate it for reading
+ * (DTLS 1.3: epoch 1; QUIC: hand the read secret to the QUIC stack).
+ */
+static int32_t Tls13ServerAcceptEarlyData(TLS_Ctx *ctx, const ClientHelloMsg *clientHello)
+{
+    HS_Ctx *hsCtx = ctx->hsCtx;
+    if (!clientHello->extension.flag.haveEarlyData) {
+        return HITLS_SUCCESS;
+    }
+    /* Remember the offer so the reject path can arm the record-skip mode */
+    hsCtx->earlyDataOffered = true;
+
+    if (ctx->config.tlsConfig.maxEarlyDataSize == 0 || hsCtx->haveHrr || hsCtx->haveHvr ||
+        !ctx->negotiatedInfo.isResume || ctx->session == NULL ||
+        hsCtx->kxCtx->pskInfo13.selectIndex != 0 || SESS_GetMaxEarlyData(ctx->session) == 0) {
+        return HITLS_SUCCESS;
+    }
+
+    uint16_t sessCipherSuite = 0;
+    (void)HITLS_SESS_GetCipherSuite(ctx->session, &sessCipherSuite);
+    if (sessCipherSuite != ctx->negotiatedInfo.cipherSuiteInfo.cipherSuite) {
+        return HITLS_SUCCESS;
+    }
+
+    const uint8_t *sessAlpn = NULL;
+    uint32_t sessAlpnSize = 0;
+    (void)SESS_GetAlpnSelected(ctx->session, &sessAlpn, &sessAlpnSize);
+    if (sessAlpnSize != ctx->negotiatedInfo.alpnSelectedSize ||
+        (sessAlpnSize != 0 && memcmp(sessAlpn, ctx->negotiatedInfo.alpnSelected, sessAlpnSize) != 0)) {
+        return HITLS_SUCCESS;
+    }
+
+    if (!Tls13ServerCheckTicketAge(ctx, clientHello)) {
+        return HITLS_SUCCESS;
+    }
+
+    int32_t ret = HS_TLS13DeriveClientEarlyTrafficSecret(ctx, hsCtx->kxCtx->pskInfo13.psk,
+        hsCtx->kxCtx->pskInfo13.pskLen);
+    if (ret != HITLS_SUCCESS) {
+        return ret;
+    }
+
+    uint32_t hashLen = SAL_CRYPT_DigestSize(ctx->negotiatedInfo.cipherSuiteInfo.hashAlg);
+    if (hashLen == 0) {
+        return HITLS_CRYPT_ERR_DIGEST;
+    }
+#if defined(HITLS_TLS_PROTO_DTLS13)
+    if (IS_SUPPORT_DATAGRAM(ctx->config.tlsConfig.originVersionMask)) {
+        REC_Dtls13SetEarlyDataEpoch(ctx, true);
+    }
+#endif
+    ret = HS_SwitchTrafficKey(ctx, hsCtx->earlyTrafficSecret, hashLen, false);
+    if (ret != HITLS_SUCCESS) {
+        return ret;
+    }
+    hsCtx->earlyDataAccepted = true;
+    ctx->earlyDataState = TLS_EARLY_DATA_ACCEPTED;
+    return HITLS_SUCCESS;
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 static int32_t Tls13ServerProcessClientHello(TLS_Ctx *ctx, HS_Msg *msg)
 {
     int32_t ret = HITLS_SUCCESS;
@@ -2614,12 +2753,27 @@ static int32_t Tls13ServerProcessClientHello(TLS_Ctx *ctx, HS_Msg *msg)
             return ret;
         }
         if (isNeedSendHrr) {
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+            /* A HelloRetryRequest rejects the 0-RTT offer of the first ClientHello */
+            if (clientHello->extension.flag.haveEarlyData) {
+                Tls13ServerRejectEarlyData(ctx);
+            }
+#endif
             return HS_ChangeState(ctx, TRY_SEND_HELLO_RETRY_REQUEST);
         }
         ret = UpdateServerBaseKeyExMode(ctx);
         if (ret != HITLS_SUCCESS) {
             return ret;
         }
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+        ret = Tls13ServerAcceptEarlyData(ctx, clientHello);
+        if (ret != HITLS_SUCCESS) {
+            return ret;
+        }
+        if (ctx->hsCtx->earlyDataOffered && !ctx->hsCtx->earlyDataAccepted) {
+            Tls13ServerRejectEarlyData(ctx);
+        }
+#endif
     }
 #if defined(HITLS_TLS_FEATURE_PHA) && defined(HITLS_TLS_FEATURE_CERT_MODE_CLIENT_VERIFY)
     TLS_Config *tlsConfig = &ctx->config.tlsConfig;

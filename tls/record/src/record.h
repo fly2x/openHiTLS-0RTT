@@ -134,6 +134,16 @@ typedef struct RecCtx {
     uint32_t pendingDataSize; /* Data length */
     const uint8_t *pendingData; /* Plain Data content */
     uint8_t pendingRecordType; /* pending record type */
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    bool earlyDataSkipArmed;      /* server rejected 0-RTT: drop undecryptable APP records (stream TLS1.3) */
+    uint32_t earlyDataSkipBytes;  /* remaining ciphertext byte allowance while skipping */
+    bool outBufSeqBump;           /* the record in outBuf owes a sequence bump to the CURRENT write
+                                     state; cleared on write-state switch so flushing a stale
+                                     record cannot advance the new state's sequence */
+#ifdef HITLS_TLS_PROTO_DTLS13
+    bool nextActivationEarlyData; /* next pending-state activation belongs to epoch 1 (0-RTT keys) */
+#endif
+#endif
 } RecCtx;
 
 /**

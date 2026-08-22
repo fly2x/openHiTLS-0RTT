@@ -146,6 +146,16 @@ typedef enum {
     PHA_REQUESTED       /* certificate request has been sent or received */
 } PHA_State;
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+/** TLS1.3 0-RTT early data progress, kept in TLS_Ctx so it outlives hsCtx */
+typedef enum {
+    TLS_EARLY_DATA_NOT_SENT = 0,   /* early data was not offered on this connection */
+    TLS_EARLY_DATA_SENDING,        /* client offered early_data and may still write early data */
+    TLS_EARLY_DATA_REJECTED,       /* offered but rejected (HRR, no EE early_data, or server policy) */
+    TLS_EARLY_DATA_ACCEPTED        /* EE carried early_data: 0-RTT accepted */
+} TLS_EarlyDataState;
+#endif
+
 /* Describes the handshake status */
 typedef enum {
     TLS_IDLE,                       /* initial state */
@@ -377,6 +387,16 @@ struct TlsCtx {
     uint8_t exporterMasterSecret[MAX_DIGEST_SIZE];     /* TLS1.3 export the master secret */
 
     uint32_t bytesLeftToRead;               /* bytes left to read after hs header has parsed */
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    uint8_t earlyDataState;                 /* TLS_EarlyDataState: 0-RTT progress on this connection */
+    uint32_t earlyDataWritten;              /* client: early data plaintext bytes written so far */
+    uint32_t earlyDataRead;                 /* server: early data plaintext bytes accepted so far */
+    const uint8_t *earlyPendingData;        /* early record already staged in the flight buffer; only
+                                               the transport flush is outstanding (must not re-encrypt) */
+    uint32_t earlyPendingLen;               /* plaintext length of the staged early record */
+    bool earlyDataIntent;                   /* client: the application asked to send early data
+                                               (HITLS_WriteEarlyData); without it no offer is made */
+#endif
     uint32_t keyUpdateType;                 /* TLS1.3 key update type */
     bool isKeyUpdateRequest;                /* TLS1.3 Check whether there are unsent key update messages */
     bool isWaitKeyUpdate;                   /* Suppress duplicate KeyUpdate triggers from CheckDecryptionLimits */

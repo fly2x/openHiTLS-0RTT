@@ -325,6 +325,51 @@ static int32_t DecSessObjTicketAgeAdd(HITLS_Session *sess, SessionObjType type, 
     return HITLS_SUCCESS;
 }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+static int32_t DecSessObjMaxEarlyData(HITLS_Session *sess, SessionObjType type, const uint8_t *data, uint32_t length,
+    uint32_t *readLen)
+{
+    uint32_t maxEarlyData = 0;
+    BSL_Tlv tlv = {0, (uint32_t)sizeof(maxEarlyData), (uint8_t *)&maxEarlyData};
+
+    int32_t ret = BSL_TLV_Parse(type, data, length, &tlv, readLen);
+    if (ret != BSL_SUCCESS) {
+        BSL_ERR_PUSH_ERROR(HITLS_SESS_ERR_DEC_START_TIME_FAIL);
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15998, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "decode session maxEarlyData fail. ret %d", ret, 0, 0, 0);
+        return HITLS_SESS_ERR_DEC_START_TIME_FAIL;
+    }
+
+    sess->maxEarlyData = maxEarlyData;
+    return HITLS_SUCCESS;
+}
+
+static int32_t DecSessObjAlpnSelected(HITLS_Session *sess, SessionObjType type, const uint8_t *data, uint32_t length,
+    uint32_t *readLen)
+{
+    uint32_t offset = sizeof(uint32_t);
+    // The length has been verified at the upper layer and must be greater than 8 bytes.
+    uint32_t tlvLen = BSL_ByteToUint32(&data[offset]);
+    if (tlvLen > HITLS_SESSION_ALPN_MAX_SIZE || tlvLen == 0) {
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15998, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "decode session alpn: bad length %u", tlvLen, 0, 0, 0);
+        return HITLS_SESS_ERR_DEC_START_TIME_FAIL;
+    }
+
+    BSL_Tlv tlv = {0, tlvLen, sess->alpnSelected};
+    int32_t ret = BSL_TLV_Parse(type, data, length, &tlv, readLen);
+    if (ret != BSL_SUCCESS) {
+        BSL_ERR_PUSH_ERROR(HITLS_SESS_ERR_DEC_START_TIME_FAIL);
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15998, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "decode session alpn fail. ret %d", ret, 0, 0, 0);
+        return HITLS_SESS_ERR_DEC_START_TIME_FAIL;
+    }
+
+    sess->alpnSelectedSize = tlvLen;
+    return HITLS_SUCCESS;
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 /*
  * Decoding function list.
  * Ensure that the sequence of decode and encode types is the same.
@@ -344,6 +389,10 @@ static const SessObjDecFunc OBJ_LIST[] = {
     {SESS_OBJ_SUPPORT_EXTEND_MASTER_SECRET, DecSessObjExtendedMasterSecret},
     {SESS_OBJ_VERIFY_RESULT, DecSessObjVerifyResult},
     {SESS_OBJ_AGE_ADD, DecSessObjTicketAgeAdd},
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    {SESS_OBJ_MAX_EARLY_DATA, DecSessObjMaxEarlyData},
+    {SESS_OBJ_ALPN_SELECTED, DecSessObjAlpnSelected},
+#endif
 };
 
 int32_t SESS_Decode(HITLS_Session *sess, const uint8_t *data, uint32_t length)
@@ -362,6 +411,10 @@ int32_t SESS_Decode(HITLS_Session *sess, const uint8_t *data, uint32_t length)
     uint32_t readLen = 0;
 
     for (index = 0; index < sizeof(OBJ_LIST) / sizeof(SessObjDecFunc); index++) {
+        if (offset == length) {
+            /* All data consumed: the remaining (newer, optional) trailing objects are absent */
+            break;
+        }
         if (length - offset < TLV_HEADER_LENGTH) {
             BSL_ERR_PUSH_ERROR(HITLS_SESS_ERR_DECODE_TICKET);
             BSL_LOG_BINLOG_FIXLEN(BINLOG_ID16009, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,

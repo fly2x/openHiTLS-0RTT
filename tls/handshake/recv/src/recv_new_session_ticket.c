@@ -29,6 +29,9 @@
 #include "hs_kx.h"
 #include "session.h"
 #include "recv_process.h"
+#if defined(HITLS_TLS_FEATURE_EARLY_DATA) && defined(HITLS_TLS_FEATURE_QUIC_TLS)
+#include "quic_tls_internal.h"
+#endif
 #ifdef HITLS_TLS_FEATURE_SESSION
 #include "session_mgr.h"
 #endif /* HITLS_TLS_FEATURE_SESSION */
@@ -53,6 +56,16 @@ static int32_t UpdateTicket(TLS_Ctx *ctx, NewSessionTicketMsg *msg, uint8_t *psk
     if (IS_TLS13_FAMILY_CTX(ctx)) {
         SESS_SetTicketAgeAdd(newSession, msg->ticketAgeAdd);
         HITLS_SESS_SetMasterKey(newSession, psk, pskSize);
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+        /* Pin the ticket's 0-RTT allowance and the connection's ALPN protocol for later offers */
+        (void)SESS_SetMaxEarlyData(newSession, msg->haveEarlyData ? msg->maxEarlyDataSize : 0);
+        int32_t alpnRet = SESS_SetAlpnSelected(newSession, ctx->negotiatedInfo.alpnSelected,
+            ctx->negotiatedInfo.alpnSelectedSize);
+        if (alpnRet != HITLS_SUCCESS) {
+            HITLS_SESS_Free(newSession);
+            return alpnRet;
+        }
+#endif
     }
 
     int32_t ret = SESS_SetTicket(newSession, msg->ticket, msg->ticketSize);
@@ -147,6 +160,18 @@ int32_t Tls13ClientRecvNewSessionTicketProcess(TLS_Ctx *ctx, HS_Msg *hsMsg)
     int32_t ret = HITLS_SUCCESS;
     NewSessionTicketMsg *msg = &hsMsg->body.newSessionTicket;
 
+#if defined(HITLS_TLS_FEATURE_EARLY_DATA) && defined(HITLS_TLS_FEATURE_QUIC_TLS)
+    /* rfc 9001 4.6.1: for QUIC a NewSessionTicket early_data extension must advertise
+     * exactly 0xffffffff; any other value is a PROTOCOL_VIOLATION */
+    if (QUIC_TLS_IsMode(ctx) && msg->haveEarlyData && msg->maxEarlyDataSize != HITLS_QUIC_MAX_EARLY_DATA_REQUIRED) {
+        BSL_ERR_PUSH_ERROR(HITLS_MSG_HANDLE_ILLEGAL_EARLY_DATA);
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID16015, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "QUIC NewSessionTicket early_data max_early_data_size(%u) is not 0xffffffff.",
+            msg->maxEarlyDataSize, 0, 0, 0);
+        ctx->method.sendAlert(ctx, ALERT_LEVEL_FATAL, ALERT_ILLEGAL_PARAMETER);
+        return HITLS_QUIC_TLS_PROTOCOL_VIOLATION;
+    }
+#endif
     /* If the value is 0, the ticket should be discarded immediately. After the TTO is backed up, the ctx->session field
      * is empty */
     if (msg->ticketLifetimeHint == 0 || ctx->session == NULL) {

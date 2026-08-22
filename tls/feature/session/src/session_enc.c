@@ -398,6 +398,57 @@ static int32_t EncSessObjTicketAgeAdd(const HITLS_Session *sess, SessionObjType 
     return HITLS_SUCCESS;
 }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+static int32_t EncSessObjMaxEarlyData(const HITLS_Session *sess, SessionObjType type, uint8_t *data, uint32_t length,
+    uint32_t *encLen)
+{
+    uint32_t maxEarlyData = sess->maxEarlyData;
+    BSL_Tlv tlv = {type, (uint32_t)sizeof(maxEarlyData), (uint8_t *)&maxEarlyData};
+
+    if (data == NULL) {
+        /* If the input parameter is NULL, return the length after encoding. */
+        *encLen = sizeof(tlv.type) + sizeof(tlv.length) + tlv.length;
+        return HITLS_SUCCESS;
+    }
+
+    int32_t ret = BSL_TLV_Pack(&tlv, data, length, encLen);
+    if (ret != BSL_SUCCESS) {
+        BSL_ERR_PUSH_ERROR(HITLS_SESS_ERR_ENC_VERIFY_RESULT_FAIL);
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15992, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "encode session maxEarlyData fail. ret %d", ret, 0, 0, 0);
+        return HITLS_SESS_ERR_ENC_VERIFY_RESULT_FAIL;
+    }
+
+    return HITLS_SUCCESS;
+}
+
+static int32_t EncSessObjAlpnSelected(const HITLS_Session *sess, SessionObjType type, uint8_t *data, uint32_t length,
+    uint32_t *encLen)
+{
+    if (sess->alpnSelectedSize == 0) {
+        return HITLS_SUCCESS;
+    }
+
+    BSL_Tlv tlv = {type, sess->alpnSelectedSize, (uint8_t *)(uintptr_t)(sess->alpnSelected)};
+
+    if (data == NULL) {
+        /* If the input parameter is NULL, return the length after encoding. */
+        *encLen = sizeof(tlv.type) + sizeof(tlv.length) + tlv.length;
+        return HITLS_SUCCESS;
+    }
+
+    int32_t ret = BSL_TLV_Pack(&tlv, data, length, encLen);
+    if (ret != BSL_SUCCESS) {
+        BSL_ERR_PUSH_ERROR(HITLS_SESS_ERR_ENC_VERIFY_RESULT_FAIL);
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15992, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "encode session alpn fail. ret %d", ret, 0, 0, 0);
+        return HITLS_SESS_ERR_ENC_VERIFY_RESULT_FAIL;
+    }
+
+    return HITLS_SUCCESS;
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 /*
  * Encoding function list.
  * Ensure that the sequence of decode and encode types is the same.
@@ -417,6 +468,10 @@ static const SessObjEncFunc OBJ_LIST[] = {
     {SESS_OBJ_SUPPORT_EXTEND_MASTER_SECRET, EncSessObjExtendedMasterSecret},
     {SESS_OBJ_VERIFY_RESULT, EncSessObjVerifyResult},
     {SESS_OBJ_AGE_ADD, EncSessObjTicketAgeAdd},
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    {SESS_OBJ_MAX_EARLY_DATA, EncSessObjMaxEarlyData},
+    {SESS_OBJ_ALPN_SELECTED, EncSessObjAlpnSelected},
+#endif
 };
 
 uint32_t SESS_GetTotalEncodeSize(const HITLS_Session *sess)

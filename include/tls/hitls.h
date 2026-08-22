@@ -235,6 +235,97 @@ int32_t HITLS_Write(HITLS_Ctx *ctx, const uint8_t *data, uint32_t dataLen, uint3
 
 /**
  * @ingroup tls
+ * @brief   TLS1.3 0-RTT early data status values returned by HITLS_GetEarlyDataStatus.
+ */
+typedef enum {
+    HITLS_EARLY_DATA_NOT_SENT = 0, /**< no early data was offered on this connection */
+    HITLS_EARLY_DATA_REJECTED = 1, /**< early data was offered but rejected by the server */
+    HITLS_EARLY_DATA_ACCEPTED = 2  /**< early data was offered and accepted */
+} HITLS_EarlyDataStatus;
+
+/**
+ * @ingroup tls
+ * @brief   TLS1.3 0-RTT: client writes early (0-RTT) application data.
+ * @details Must be called before the handshake completes; the first call on an idle connection
+ *          sends the ClientHello with the early_data extension and activates the 0-RTT keys.
+ *          The connection must resume a TLS1.3 session whose ticket advertised a nonzero
+ *          max_early_data_size, and HITLS_CFG_SetMaxEarlyDataSize must be nonzero.
+ *          After the handshake, use HITLS_GetEarlyDataStatus to learn whether the server
+ *          accepted the early data; rejected data must be retransmitted with HITLS_Write
+ *          by the caller if still relevant.
+ * @attention Early data is replayable (RFC 8446 Appendix E.5): send only idempotent data.
+ *            Not supported in QUIC mode (0-RTT payloads belong to the QUIC stack).
+ * @param   ctx [IN] TLS context (client)
+ * @param   data [IN] Early data to be written
+ * @param   dataLen [IN] Length to be written
+ * @param   writeLen [OUT] Length actually written
+ * @retval  HITLS_SUCCESS, the early data was written.
+ * @retval  HITLS_MSG_HANDLE_EARLY_DATA_NOT_ALLOWED, the connection cannot send early data
+ *          (no suitable session, feature disabled, wrong role/state, or offer already rejected).
+ * @retval  HITLS_MSG_HANDLE_EARLY_DATA_LIMIT_EXCEEDED, the ticket's max_early_data_size is exhausted.
+ * @retval  For other error codes, see hitls_error.h.
+ */
+int32_t HITLS_WriteEarlyData(HITLS_Ctx *ctx, const uint8_t *data, uint32_t dataLen, uint32_t *writeLen);
+
+/**
+ * @ingroup tls
+ * @brief   TLS1.3 0-RTT: server reads early (0-RTT) application data during the handshake.
+ * @details Drives the handshake as needed (like HITLS_Accept) and returns early data sent by
+ *          the client. Call repeatedly until it returns HITLS_READ_EARLY_DATA_FINISH, which
+ *          signals the end of early data (EndOfEarlyData received, or the handshake completed);
+ *          then complete the handshake with HITLS_Accept and read with HITLS_Read as usual.
+ *          If the connection does not involve early data, HITLS_READ_EARLY_DATA_FINISH is
+ *          returned as soon as this is known.
+ * @attention Early data is replayable (RFC 8446 Appendix E.5): only process idempotent data.
+ *            Not supported in QUIC mode.
+ * @param   ctx [IN] TLS context (server)
+ * @param   data [OUT] Buffer for storing early data
+ * @param   bufSize [IN] Buffer size
+ * @param   readLen [OUT] Number of early data bytes actually read
+ * @retval  HITLS_SUCCESS, early data was read into the buffer.
+ * @retval  HITLS_READ_EARLY_DATA_FINISH, no more early data will arrive; continue the handshake.
+ * @retval  HITLS_REC_NORMAL_RECV_BUF_EMPTY, no data available yet, call again.
+ * @retval  For other error codes, see hitls_error.h.
+ */
+int32_t HITLS_ReadEarlyData(HITLS_Ctx *ctx, uint8_t *data, uint32_t bufSize, uint32_t *readLen);
+
+/**
+ * @ingroup tls
+ * @brief   TLS1.3 0-RTT: query the early data status of this connection.
+ * @details On the client the status becomes final once the EncryptedExtensions message is
+ *          processed (or a HelloRetryRequest rejects the offer); on the server it is final
+ *          once the ClientHello is processed.
+ * @param   ctx [IN] TLS context
+ * @param   status [OUT] One of HITLS_EarlyDataStatus.
+ * @retval  HITLS_SUCCESS, if successful.
+ * @retval  HITLS_NULL_INPUT, an input parameter is null.
+ */
+int32_t HITLS_GetEarlyDataStatus(const HITLS_Ctx *ctx, uint32_t *status);
+
+/**
+ * @ingroup tls
+ * @brief   Set the TLS1.3 0-RTT early data limit on a connection; see HITLS_CFG_SetMaxEarlyDataSize.
+ *
+ * @param   ctx [IN] TLS context
+ * @param   maxEarlyDataSize [IN] Maximum early data in bytes; 0 disables 0-RTT.
+ * @retval  HITLS_SUCCESS, if successful.
+ * @retval  HITLS_NULL_INPUT, ctx is null.
+ */
+int32_t HITLS_SetMaxEarlyDataSize(HITLS_Ctx *ctx, uint32_t maxEarlyDataSize);
+
+/**
+ * @ingroup tls
+ * @brief   Obtain the TLS1.3 0-RTT early data limit of a connection.
+ *
+ * @param   ctx [IN] TLS context
+ * @param   maxEarlyDataSize [OUT] Configured limit in bytes; 0 means 0-RTT is disabled.
+ * @retval  HITLS_SUCCESS, if successful.
+ * @retval  HITLS_NULL_INPUT, an input parameter is null.
+ */
+int32_t HITLS_GetMaxEarlyDataSize(const HITLS_Ctx *ctx, uint32_t *maxEarlyDataSize);
+
+/**
+ * @ingroup tls
  * @brief   Obtain the maximum writable (plaintext) length.
  *
  * @param   ctx [OUT] TLS connection handle.

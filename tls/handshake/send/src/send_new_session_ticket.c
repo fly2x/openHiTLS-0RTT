@@ -30,6 +30,9 @@
 #include "session_mgr.h"
 #include "pack.h"
 #include "send_process.h"
+#if defined(HITLS_TLS_FEATURE_EARLY_DATA) && defined(HITLS_TLS_FEATURE_QUIC_TLS)
+#include "quic_tls_internal.h"
+#endif
 
 #ifdef HITLS_TLS_PROTO_TLS_BASIC
 int32_t SendNewSessionTicketProcess(TLS_Ctx *ctx)
@@ -89,6 +92,22 @@ static int32_t Tls13TicketGenerateConfigSession(TLS_Ctx *ctx, HITLS_Session **se
     SESS_SetStartTime(newSession, (uint64_t)BSL_SAL_CurrentSysTimeGet());
     HITLS_SESS_SetTimeout(newSession, (uint64_t)hsCtx->ticketLifetimeHint);
     HITLS_SESS_SetMasterKey(newSession, resumePsk, hashLen);
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    /* rfc 8446 4.6.1 / rfc 9001 4.6.1: advertise the 0-RTT allowance and pin the connection's
+     * ALPN protocol so a later 0-RTT offer can be validated against it */
+    uint32_t maxEarlyData = ctx->config.tlsConfig.maxEarlyDataSize;
+#ifdef HITLS_TLS_FEATURE_QUIC_TLS
+    if (QUIC_TLS_IsMode(ctx) && maxEarlyData != 0) {
+        maxEarlyData = HITLS_QUIC_MAX_EARLY_DATA_REQUIRED;
+    }
+#endif
+    (void)SESS_SetMaxEarlyData(newSession, maxEarlyData);
+    ret = SESS_SetAlpnSelected(newSession, ctx->negotiatedInfo.alpnSelected, ctx->negotiatedInfo.alpnSelectedSize);
+    if (ret != HITLS_SUCCESS) {
+        HITLS_SESS_Free(newSession);
+        return ret;
+    }
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
     ret = SAL_CRYPT_Rand(LIBCTX_FROM_CTX(ctx), (uint8_t *)&hsCtx->ticketAgeAdd, sizeof(hsCtx->ticketAgeAdd));
     if (ret != HITLS_SUCCESS) {
         HITLS_SESS_Free(newSession);

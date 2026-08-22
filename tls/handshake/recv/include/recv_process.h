@@ -247,6 +247,19 @@ int32_t Tls13ClientRecvFinishedProcess(TLS_Ctx *ctx, const HS_Msg *msg);
  */
 int32_t Tls13ServerRecvFinishedProcess(TLS_Ctx *ctx, const HS_Msg *msg);
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+/**
+ * @brief   TLS1.3 0-RTT: server processes EndOfEarlyData, switches the read state to the
+ *          client handshake traffic secret and expects the client Finished next.
+ *
+ * @param   ctx [IN] TLS context
+ * @param   msg [IN] Parsed EndOfEarlyData message
+ *
+ * @return  HITLS_SUCCESS succeeded; other error codes see hitls_error.h
+ */
+int32_t Tls13ServerRecvEndOfEarlyDataProcess(TLS_Ctx *ctx, const HS_Msg *msg);
+#endif
+
 int32_t ProcessCertCallback(TLS_Ctx *ctx);
 #ifdef __cplusplus
 }

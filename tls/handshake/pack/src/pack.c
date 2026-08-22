@@ -137,6 +137,12 @@ static int32_t PackTls13HsMsgBody(TLS_Ctx *ctx, HS_MsgType type, PackPacket *pkt
             ret = PackAppendUint8ToBuf(pkt, ctx->reqCidNum);
             break;
 #endif
+#if defined(HITLS_TLS_FEATURE_EARLY_DATA) && defined(HITLS_TLS_HOST_CLIENT)
+        case END_OF_EARLY_DATA:
+            /* rfc 8446 4.5: EndOfEarlyData has an empty body */
+            ret = HITLS_SUCCESS;
+            break;
+#endif
         default:
             ret = HITLS_PACK_UNSUPPORT_HANDSHAKE_MSG;
             break;

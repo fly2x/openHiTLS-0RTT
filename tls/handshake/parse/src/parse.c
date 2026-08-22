@@ -201,6 +201,9 @@ static const HsMsgTypeCheck g_checkHsMsgTypeList[] = {
     [TRY_RECV_FINISH] = {.msgType = FINISHED, .checkCb = NULL},
 #if defined(HITLS_TLS_PROTO_TLS13_FAMILY)
     [TRY_RECV_KEY_UPDATE] = {.msgType = KEY_UPDATE, .checkCb = NULL},
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    [TRY_RECV_END_OF_EARLY_DATA] = {.msgType = END_OF_EARLY_DATA, .checkCb = NULL},
+#endif
 #endif /* HITLS_TLS_PROTO_TLS13_FAMILY */
     [TRY_RECV_HELLO_REQUEST] = {.msgType = HELLO_REQUEST, .checkCb = NULL},
 #if defined(HITLS_TLS_FEATURE_DTLS_CID) && defined(HITLS_TLS_PROTO_DTLS13)
@@ -441,6 +444,15 @@ int32_t Tls13ParseHandShakeMsg(TLS_Ctx *ctx, const uint8_t *hsBodyData, uint32_t
             return ParseNewConnectionId(ctx, hsBodyData, hsBodyLen, hsMsg);
         case REQUEST_CONNECTION_ID:
             return ParseRequestConnectionId(ctx, hsBodyData, hsBodyLen, hsMsg);
+#endif
+#if defined(HITLS_TLS_FEATURE_EARLY_DATA) && defined(HITLS_TLS_HOST_SERVER)
+        case END_OF_EARLY_DATA:
+            /* rfc 8446 4.5: EndOfEarlyData has an empty body */
+            if (hsBodyLen != 0u) {
+                return ParseErrorProcess(ctx, HITLS_PARSE_INVALID_MSG_LEN, BINLOG_ID15611,
+                    BINGLOG_STR("end_of_early_data length is not zero"), ALERT_DECODE_ERROR);
+            }
+            return HITLS_SUCCESS;
 #endif
         case HELLO_REQUEST:
             if (hsBodyLen != 0u) {

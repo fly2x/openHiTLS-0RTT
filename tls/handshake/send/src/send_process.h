@@ -294,6 +294,18 @@ int32_t Tls13ServerSendFinishedProcess(TLS_Ctx *ctx);
  */
 int32_t Tls13ClientSendFinishedProcess(TLS_Ctx *ctx);
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+/**
+ * @brief   TLS1.3 0-RTT: client sends EndOfEarlyData under the early traffic key, then switches
+ *          the write state to the client handshake traffic secret.
+ *
+ * @param   ctx [IN] TLS context
+ *
+ * @return  HITLS_SUCCESS succeeded; other error codes see hitls_error.h
+ */
+int32_t Tls13ClientSendEndOfEarlyDataProcess(TLS_Ctx *ctx);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

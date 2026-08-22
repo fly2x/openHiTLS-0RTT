@@ -43,6 +43,14 @@ typedef enum {
 
 /**
  * @ingroup hitls_quic_tls
+ * @brief   RFC 9001 Section 4.6.1: a QUIC server enabling 0-RTT MUST advertise
+ *          max_early_data_size 0xffffffff in the NewSessionTicket early_data
+ *          extension; QUIC flow control governs the actual amount of 0-RTT data.
+ */
+#define HITLS_QUIC_MAX_EARLY_DATA_REQUIRED 0xffffffffu
+
+/**
+ * @ingroup hitls_quic_tls
  * @brief   Callback for installing a read traffic secret at one encryption level.
  *
  * @param   ctx [IN] TLS connection handle.
@@ -243,6 +251,29 @@ int32_t HITLS_QUIC_TLS_SetTransportParams(HITLS_Ctx *ctx, const uint8_t *params,
  * @retval  For other error codes, see hitls_error.h.
  */
 int32_t HITLS_QUIC_TLS_GetPeerTransportParams(const HITLS_Ctx *ctx, const uint8_t **params, size_t *paramsLen);
+
+/**
+ * @ingroup hitls_quic_tls
+ * @brief   Enable or disable TLS 0-RTT for this QUIC connection.
+ *
+ * @details Must be called before HITLS_Connect or HITLS_Accept starts the handshake, on a
+ *          connection already in QUIC mode (after @ref HITLS_QUIC_TLS_SetQuicTlsMethod).
+ *          Server: when enabled, every NewSessionTicket advertises max_early_data_size
+ *          0xffffffff (RFC 9001 Section 4.6.1) and a matching 0-RTT offer is accepted; on
+ *          acceptance the EARLY_DATA-level read secret is delivered through the setReadSecret
+ *          callback right after the ClientHello is processed. Client: when enabled and the
+ *          session being resumed advertised max_early_data_size 0xffffffff, the ClientHello
+ *          carries the early_data extension and the EARLY_DATA-level write secret is delivered
+ *          through the setWriteSecret callback once the ClientHello flight is produced.
+ *          The EARLY_DATA level never carries CRYPTO frames and does not change the levels
+ *          reported by @ref HITLS_QUIC_TLS_GetReadLevel / @ref HITLS_QUIC_TLS_GetWriteLevel.
+ *          Use HITLS_GetEarlyDataStatus to learn whether the peer accepted 0-RTT.
+ * @param   ctx [IN] TLS connection handle in QUIC mode.
+ * @param   enabled [IN] true to enable 0-RTT, false to disable (default).
+ * @retval  HITLS_SUCCESS, if successful.
+ * @retval  For other error codes, see hitls_error.h.
+ */
+int32_t HITLS_QUIC_TLS_SetEarlyDataEnabled(HITLS_Ctx *ctx, bool enabled);
 
 /**
  * @ingroup hitls_quic_tls

@@ -601,6 +601,83 @@ int32_t HS_TLS13CalcServerFinishProcessSecret(TLS_Ctx *ctx)
     return ret;
 }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+/*
+    client_early_traffic_secret = Derive-Secret(Early Secret, "c e traffic", ClientHello)
+    The transcript covers exactly the (possibly HRR-free) ClientHello, taken from the cached
+    handshake messages: at the call points the cache holds only the ClientHello.
+*/
+int32_t HS_TLS13DeriveClientEarlyTrafficSecret(TLS_Ctx *ctx, uint8_t *psk, uint32_t pskLen)
+{
+    uint16_t hashAlg = ctx->negotiatedInfo.cipherSuiteInfo.hashAlg;
+    uint32_t hashLen = SAL_CRYPT_DigestSize(hashAlg);
+    if (hashLen == 0 || hashLen > MAX_DIGEST_SIZE) {
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID16888, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN, "DigestSize err", 0, 0, 0, 0);
+        return HITLS_CRYPT_ERR_DIGEST;
+    }
+
+    uint32_t earlySecretLen = hashLen;
+    int32_t ret = HS_TLS13DeriveEarlySecret(LIBCTX_FROM_CTX(ctx), ATTRIBUTE_FROM_CTX(ctx),
+        hashAlg, psk, pskLen, ctx->hsCtx->earlySecret, &earlySecretLen);
+    if (ret != HITLS_SUCCESS) {
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID16889, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "DeriveEarlySecret fail", 0, 0, 0, 0);
+        return ret;
+    }
+
+    /* The verify context may not carry a live hash yet (the suite is fixed only at ServerHello),
+     * so hash the cached ClientHello with the session's hash algorithm. */
+    uint8_t transcriptHash[MAX_DIGEST_SIZE] = {0};
+    uint32_t transcriptHashLen = MAX_DIGEST_SIZE;
+    HITLS_HASH_Ctx *hashCtx = SAL_CRYPT_DigestInit(LIBCTX_FROM_CTX(ctx), ATTRIBUTE_FROM_CTX(ctx), hashAlg);
+    if (hashCtx == NULL) {
+        BSL_ERR_PUSH_ERROR(HITLS_CRYPT_ERR_DIGEST);
+        return HITLS_CRYPT_ERR_DIGEST;
+    }
+    /* Early keys can be derived before version negotiation completes (client side), so use the
+     * effective version for the DTLS 1.3 transcript style. */
+    ret = VERIFY_UpdateCachedTranscriptHash(hashCtx, ctx->hsCtx->verifyCtx->dataBuf,
+        GET_VERSION_FROM_CTX(ctx), 0);
+    if (ret == HITLS_SUCCESS) {
+        ret = SAL_CRYPT_DigestFinal(hashCtx, transcriptHash, &transcriptHashLen);
+    }
+    SAL_CRYPT_DigestFree(hashCtx);
+    if (ret != HITLS_SUCCESS) {
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID16889, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "early traffic transcript hash fail", 0, 0, 0, 0);
+        return ret;
+    }
+
+    uint8_t label[] = "c e traffic";
+    CRYPT_KeyDeriveParameters deriveInfo = {0};
+    deriveInfo.hashAlgo = hashAlg;
+    deriveInfo.secret = ctx->hsCtx->earlySecret;
+    deriveInfo.secretLen = hashLen;
+    deriveInfo.label = label;
+    deriveInfo.labelLen = sizeof(label) - 1;
+    deriveInfo.seed = transcriptHash;
+    deriveInfo.seedLen = transcriptHashLen;
+    deriveInfo.libCtx = LIBCTX_FROM_CTX(ctx);
+    deriveInfo.attrName = ATTRIBUTE_FROM_CTX(ctx);
+#ifdef HITLS_TLS_PROTO_DTLS13
+    if (IS_DTLS13_CTX(ctx)) {
+        deriveInfo.labelPrefix = (const uint8_t *)CRYPT_DTLS13_HKDF_LABEL_PREFIX;
+        deriveInfo.labelPrefixLen = CRYPT_DTLS13_HKDF_LABEL_PREFIX_LEN;
+    }
+#endif
+    ret = HS_TLS13DeriveSecret(&deriveInfo, true, ctx->hsCtx->earlyTrafficSecret, hashLen);
+    if (ret != HITLS_SUCCESS) {
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID16892, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "DeriveSecret fail", 0, 0, 0, 0);
+        return ret;
+    }
+#ifdef HITLS_TLS_MAINTAIN_KEYLOG
+    HITLS_LogSecret(ctx, CLIENT_EARLY_LABEL, ctx->hsCtx->earlyTrafficSecret, hashLen);
+#endif /* HITLS_TLS_MAINTAIN_KEYLOG */
+    return HITLS_SUCCESS;
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 int32_t HS_SwitchTrafficKey(TLS_Ctx *ctx, uint8_t *secret, uint32_t secretLen, bool isOut)
 {
 #ifdef HITLS_TLS_FEATURE_QUIC_TLS

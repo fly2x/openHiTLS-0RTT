@@ -230,6 +230,9 @@ static void ShallowCopy(HITLS_Ctx *ctx, const HITLS_Config *srcConfig)
 #ifdef HITLS_TLS_FEATURE_SESSION_TICKET
     destConfig->ticketNums = srcConfig->ticketNums;
 #endif
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    destConfig->maxEarlyDataSize = srcConfig->maxEarlyDataSize;
+#endif
 #ifdef HITLS_TLS_FEATURE_FLIGHT
     destConfig->isFlightTransmitEnable = srcConfig->isFlightTransmitEnable;
 #endif

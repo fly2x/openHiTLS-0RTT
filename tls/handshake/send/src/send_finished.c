@@ -28,6 +28,7 @@
 #include "pack.h"
 #include "send_process.h"
 #include "hs_kx.h"
+#include "rec.h"
 #ifdef HITLS_TLS_FEATURE_QUIC_TLS
 #include "quic_tls_internal.h"
 #endif
@@ -181,6 +182,55 @@ int32_t DtlsClientSendFinishedProcess(TLS_Ctx *ctx)
 #endif /* HITLS_TLS_PROTO_DTLS12 */
 
 #if defined(HITLS_TLS_PROTO_TLS13_FAMILY)
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+/*
+ * rfc 8446 4.5: EndOfEarlyData closes the accepted 0-RTT stream. It is protected under the
+ * client_early_traffic_secret (still the active write state) and, once sent, the write state
+ * moves on to the client handshake traffic secret for the rest of the client's flight.
+ */
+int32_t Tls13ClientSendEndOfEarlyDataProcess(TLS_Ctx *ctx)
+{
+    int32_t ret = HITLS_SUCCESS;
+    HS_Ctx *hsCtx = (HS_Ctx *)ctx->hsCtx;
+
+    if (hsCtx->msgLen == 0) {
+        ret = HS_PackMsg(ctx, END_OF_EARLY_DATA);
+        if (ret != HITLS_SUCCESS) {
+            BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15376, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+                "client pack tls1.3 end_of_early_data msg fail.", 0, 0, 0, 0);
+            return ret;
+        }
+    }
+
+    ret = HS_SendMsg(ctx);
+    if (ret != HITLS_SUCCESS) {
+        return ret;
+    }
+
+    BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15377, BSL_LOG_LEVEL_INFO, BSL_LOG_BINLOG_TYPE_RUN,
+        "client send tls1.3 end_of_early_data msg success.", 0, 0, 0, 0);
+
+    /* The early-data write phase is closed: a staged record the application never finished
+     * retrying is already ahead of the EndOfEarlyData in the flight buffer, so only the retry
+     * bookkeeping has to go. */
+    REC_ClearPendingAppData(ctx);
+
+    uint32_t hashLen = SAL_CRYPT_DigestSize(ctx->negotiatedInfo.cipherSuiteInfo.hashAlg);
+    if (hashLen == 0) {
+        return HITLS_CRYPT_ERR_DIGEST;
+    }
+    ret = HS_SwitchTrafficKey(ctx, hsCtx->clientHsTrafficSecret, hashLen, true);
+    if (ret != HITLS_SUCCESS) {
+        return ret;
+    }
+
+    if (hsCtx->isNeedClientCert) {
+        return HS_ChangeState(ctx, TRY_SEND_CERTIFICATE);
+    }
+    return HS_ChangeState(ctx, TRY_SEND_FINISH);
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 static int32_t Tls13ClientSendFinishPostProcess(TLS_Ctx *ctx)
 {
     int32_t ret = HITLS_SUCCESS;
@@ -239,7 +289,12 @@ int32_t Tls13ClientSendFinishedProcess(TLS_Ctx *ctx)
     /* Determine whether the message needs to be packed */
     if (hsCtx->msgLen == 0) {
         if ((ctx->config.tlsConfig.isMiddleBoxCompat && (!ctx->hsCtx->haveHrr)) &&
-            !IS_SUPPORT_DATAGRAM(ctx->config.tlsConfig.originVersionMask) && (!ctx->hsCtx->isNeedClientCert)) {
+            !IS_SUPPORT_DATAGRAM(ctx->config.tlsConfig.originVersionMask) && (!ctx->hsCtx->isNeedClientCert)
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+            /* With 0-RTT, the single compat CCS was already sent right after the ClientHello */
+            && !ctx->hsCtx->earlyCcsSent
+#endif
+        ) {
             /* In the middlebox scenario, if the client does not send the hrr message and the certificate does not need
              * to be sent, a CCS message needs to be sent before the finished message */
             ret = ctx->method.sendCCS(ctx);
@@ -252,6 +307,10 @@ int32_t Tls13ClientSendFinishedProcess(TLS_Ctx *ctx)
          * need to activate the key again */
         if (!ctx->hsCtx->isNeedClientCert && ctx->negotiatedInfo.version != HITLS_VERSION_DTLS13 &&
             ctx->phaState != PHA_REQUESTED
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+            /* Accepted 0-RTT: EndOfEarlyData processing already switched to the handshake key */
+            && ctx->earlyDataState != TLS_EARLY_DATA_ACCEPTED
+#endif
 #ifdef HITLS_TLS_FEATURE_QUIC_TLS
             /* QUIC installs this secret already at ServerHello; the per-level
              * install-once guard would reject the second install. */
@@ -507,15 +566,32 @@ int32_t Tls13ServerSendFinishedProcess(TLS_Ctx *ctx)
     if (hashLen == 0) {
         return RETURN_ERROR_NUMBER_PROCESS(HITLS_CRYPT_ERR_DIGEST, BINLOG_ID17146, "DigestSize fail");
     }
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    /* Accepted 0-RTT over stream TLS 1.3: the read state stays at the early traffic key
+     * until EndOfEarlyData arrives; the client Finished transcript will include it.
+     * DTLS 1.3 has no EndOfEarlyData (rfc 9147 5.6): the epoch-2 read activation below keeps
+     * the epoch-1 state readable as the outdated state. QUIC delivers CRYPTO per level and
+     * needs the handshake read secret now. */
+    bool deferClientHsRead = (ctx->earlyDataState == TLS_EARLY_DATA_ACCEPTED &&
+        ctx->negotiatedInfo.version == HITLS_VERSION_TLS13
+#ifdef HITLS_TLS_FEATURE_QUIC_TLS
+        && !QUIC_TLS_IsMode(ctx)
+#endif
+    );
+#else
+    bool deferClientHsRead = false;
+#endif
     /* QUIC installs this secret already when the EE flight starts; the
      * per-level install-once guard would reject the second install. */
 #ifdef HITLS_TLS_FEATURE_QUIC_TLS
     if (!QUIC_TLS_IsMode(ctx))
 #endif
     {
-        ret = HS_SwitchTrafficKey(ctx, ctx->hsCtx->clientHsTrafficSecret, hashLen, false);
-        if (ret != HITLS_SUCCESS) {
-            return RETURN_ERROR_NUMBER_PROCESS(ret, BINLOG_ID17147, "SwitchTrafficKey fail");
+        if (!deferClientHsRead) {
+            ret = HS_SwitchTrafficKey(ctx, ctx->hsCtx->clientHsTrafficSecret, hashLen, false);
+            if (ret != HITLS_SUCCESS) {
+                return RETURN_ERROR_NUMBER_PROCESS(ret, BINLOG_ID17147, "SwitchTrafficKey fail");
+            }
         }
     }
 
@@ -523,6 +599,17 @@ int32_t Tls13ServerSendFinishedProcess(TLS_Ctx *ctx)
     ret = HS_SwitchTrafficKey(ctx, ctx->serverAppTrafficSecret, hashLen, true);
     if (ret != HITLS_SUCCESS) {
         return RETURN_ERROR_NUMBER_PROCESS(ret, BINLOG_ID17148, "SwitchTrafficKey fail");
+    }
+
+    if (deferClientHsRead) {
+#ifdef HITLS_TLS_PROTO_DTLS13
+        ret = HS_StartTimer(ctx);
+        if (ret != HITLS_SUCCESS) {
+            return ret;
+        }
+#endif
+        /* Client verify data is computed after EndOfEarlyData joins the transcript */
+        return HS_ChangeState(ctx, TRY_RECV_END_OF_EARLY_DATA);
     }
 
     HITLS_HandshakeState nextState = TRY_RECV_CERTIFICATE;

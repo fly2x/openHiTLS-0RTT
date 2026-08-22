@@ -66,6 +66,19 @@ int32_t SESS_SetStartTime(HITLS_Session *sess, uint64_t startTime);
 int32_t SESS_SetTicketAgeAdd(HITLS_Session *sess, uint32_t ticketAgeAdd);
 
 uint32_t SESS_GetTicketAgeAdd(const HITLS_Session *sess);
+
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+/* set max_early_data_size promised for 0-RTT with this session's ticket */
+int32_t SESS_SetMaxEarlyData(HITLS_Session *sess, uint32_t maxEarlyData);
+
+uint32_t SESS_GetMaxEarlyData(const HITLS_Session *sess);
+
+/* set the ALPN protocol negotiated on the original connection */
+int32_t SESS_SetAlpnSelected(HITLS_Session *sess, const uint8_t *alpn, uint32_t alpnSize);
+
+/* get the ALPN protocol; *alpn borrows session memory */
+int32_t SESS_GetAlpnSelected(const HITLS_Session *sess, const uint8_t **alpn, uint32_t *alpnSize);
+#endif
 #ifdef __cplusplus
 }
 #endif

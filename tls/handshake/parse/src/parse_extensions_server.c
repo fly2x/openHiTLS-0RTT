@@ -782,6 +782,25 @@ static int32_t ParseClientPostHsAuth(ParsePacket *pkt, ClientHelloMsg *msg)
 
     return HITLS_SUCCESS;
 }
+
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+static int32_t ParseClientEarlyData(ParsePacket *pkt, ClientHelloMsg *msg)
+{
+    /* Parsed extensions of the same type */
+    if (msg->extension.flag.haveEarlyData == true) {
+        return ParseDupExtProcess(pkt->ctx, BINLOG_ID15182, BINGLOG_STR("early_data"));
+    }
+
+    /* rfc 8446 4.2.10: the "early_data" extension in the ClientHello is empty */
+    if (pkt->bufLen != 0) {
+        return ParseErrorExtLengthProcess(pkt->ctx, BINLOG_ID15183, BINGLOG_STR("early_data"));
+    }
+
+    msg->extension.flag.haveEarlyData = true;
+
+    return HITLS_SUCCESS;
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
 #endif /* HITLS_TLS_PROTO_TLS13_FAMILY */
 #if defined(HITLS_TLS_PROTO_TLS_BASIC) || defined(HITLS_TLS_PROTO_DTLS12)
 static int32_t ParseClientSecRenegoInfo(ParsePacket *pkt, ClientHelloMsg *msg)
@@ -952,6 +971,9 @@ static int32_t ParseClientExBody(TLS_Ctx *ctx, uint16_t extMsgType, const uint8_
 #endif /* HITLS_TLS_FEATURE_CERTIFICATE_AUTHORITIES */
         { .exMsgType = HS_EX_TYPE_POST_HS_AUTH, .parseFunc = ParseClientPostHsAuth},
         { .exMsgType = HS_EX_TYPE_KEY_SHARE, .parseFunc = ParseClientKeyShare},
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+        { .exMsgType = HS_EX_TYPE_EARLY_DATA, .parseFunc = ParseClientEarlyData},
+#endif
 #endif /* HITLS_TLS_PROTO_TLS13_FAMILY */
 #if defined(HITLS_TLS_PROTO_TLS_BASIC) || defined(HITLS_TLS_PROTO_DTLS12)
         { .exMsgType = HS_EX_TYPE_RENEGOTIATION_INFO, .parseFunc = ParseClientSecRenegoInfo},

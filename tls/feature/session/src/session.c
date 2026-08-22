@@ -716,6 +716,78 @@ uint32_t SESS_GetTicketAgeAdd(const HITLS_Session *sess)
     return ticketAgeAdd;
 }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+int32_t SESS_SetMaxEarlyData(HITLS_Session *sess, uint32_t maxEarlyData)
+{
+    if (sess == NULL) {
+        BSL_ERR_PUSH_ERROR(HITLS_NULL_INPUT);
+        return HITLS_NULL_INPUT;
+    }
+
+    BSL_SAL_ThreadWriteLock(sess->lock);
+    sess->maxEarlyData = maxEarlyData;
+    BSL_SAL_ThreadUnlock(sess->lock);
+    return HITLS_SUCCESS;
+}
+
+uint32_t SESS_GetMaxEarlyData(const HITLS_Session *sess)
+{
+    uint32_t maxEarlyData = 0;
+    if (sess == NULL) {
+        return 0;
+    }
+
+    BSL_SAL_ThreadReadLock(sess->lock);
+    maxEarlyData = sess->maxEarlyData;
+    BSL_SAL_ThreadUnlock(sess->lock);
+    return maxEarlyData;
+}
+
+int32_t HITLS_SESS_GetMaxEarlyData(const HITLS_Session *sess, uint32_t *maxEarlyData)
+{
+    if (sess == NULL || maxEarlyData == NULL) {
+        BSL_ERR_PUSH_ERROR(HITLS_NULL_INPUT);
+        return HITLS_NULL_INPUT;
+    }
+    *maxEarlyData = SESS_GetMaxEarlyData(sess);
+    return HITLS_SUCCESS;
+}
+
+int32_t SESS_SetAlpnSelected(HITLS_Session *sess, const uint8_t *alpn, uint32_t alpnSize)
+{
+    if (sess == NULL) {
+        BSL_ERR_PUSH_ERROR(HITLS_NULL_INPUT);
+        return HITLS_NULL_INPUT;
+    }
+    if (alpnSize > HITLS_SESSION_ALPN_MAX_SIZE || (alpnSize != 0 && alpn == NULL)) {
+        BSL_ERR_PUSH_ERROR(HITLS_INVALID_INPUT);
+        return HITLS_INVALID_INPUT;
+    }
+
+    BSL_SAL_ThreadWriteLock(sess->lock);
+    if (alpnSize != 0) {
+        memcpy(sess->alpnSelected, alpn, alpnSize);
+    }
+    sess->alpnSelectedSize = alpnSize;
+    BSL_SAL_ThreadUnlock(sess->lock);
+    return HITLS_SUCCESS;
+}
+
+int32_t SESS_GetAlpnSelected(const HITLS_Session *sess, const uint8_t **alpn, uint32_t *alpnSize)
+{
+    if (sess == NULL || alpn == NULL || alpnSize == NULL) {
+        BSL_ERR_PUSH_ERROR(HITLS_NULL_INPUT);
+        return HITLS_NULL_INPUT;
+    }
+
+    BSL_SAL_ThreadReadLock(sess->lock);
+    *alpn = (sess->alpnSelectedSize == 0) ? NULL : sess->alpnSelected;
+    *alpnSize = sess->alpnSelectedSize;
+    BSL_SAL_ThreadUnlock(sess->lock);
+    return HITLS_SUCCESS;
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 void *HITLS_SESS_GetUserData(const HITLS_Session *sess)
 {
     if (sess == NULL) {

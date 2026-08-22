@@ -29,6 +29,9 @@
 #include "recv_process.h"
 #include "hs_kx.h"
 #include "bsl_bytes.h"
+#if defined(HITLS_TLS_FEATURE_EARLY_DATA) && defined(HITLS_TLS_FEATURE_QUIC_TLS)
+#include "quic_tls_internal.h"
+#endif
 #ifdef HITLS_TLS_FEATURE_SESSION
 #include "session_mgr.h"
 #endif
@@ -368,6 +371,18 @@ int32_t Tls13ClientRecvFinishedProcess(TLS_Ctx *ctx, const HS_Msg *msg)
             "SwitchTrafficKey fail", 0, 0, 0, 0);
         return ret;
     }
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    /* rfc 8446 4.5: accepted early data ends with EndOfEarlyData after the server Finished.
+     * DTLS 1.3 (rfc 9147 5.6) and QUIC (rfc 9001 8.3) do not use EndOfEarlyData. */
+    if (ctx->earlyDataState == TLS_EARLY_DATA_ACCEPTED &&
+        ctx->negotiatedInfo.version == HITLS_VERSION_TLS13
+#ifdef HITLS_TLS_FEATURE_QUIC_TLS
+        && !QUIC_TLS_IsMode(ctx)
+#endif
+    ) {
+        return HS_ChangeState(ctx, TRY_SEND_END_OF_EARLY_DATA);
+    }
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
     if (ctx->hsCtx->isNeedClientCert) {
         return HS_ChangeState(ctx, TRY_SEND_CERTIFICATE);
     }
@@ -400,6 +415,38 @@ int32_t Tls12ServerRecvFinishedProcess(TLS_Ctx *ctx, const HS_Msg *msg)
 #endif /* HITLS_TLS_PROTO_TLS_BASIC */
 
 #if defined(HITLS_TLS_PROTO_TLS13_FAMILY)
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+int32_t Tls13ServerRecvEndOfEarlyDataProcess(TLS_Ctx *ctx, const HS_Msg *msg)
+{
+    (void)msg;
+    if (ctx->earlyDataState != TLS_EARLY_DATA_ACCEPTED) {
+        BSL_ERR_PUSH_ERROR(HITLS_MSG_HANDLE_UNEXPECTED_MESSAGE);
+        ctx->method.sendAlert(ctx, ALERT_LEVEL_FATAL, ALERT_UNEXPECTED_MESSAGE);
+        return HITLS_MSG_HANDLE_UNEXPECTED_MESSAGE;
+    }
+
+    /* The transcript now covers EndOfEarlyData, so the expected client Finished can be computed */
+    int32_t ret = VERIFY_Tls13CalcVerifyData(ctx, true);
+    if (ret != HITLS_SUCCESS) {
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15381, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "server calculate client finished data fail.", 0, 0, 0, 0);
+        ctx->method.sendAlert(ctx, ALERT_LEVEL_FATAL, ALERT_INTERNAL_ERROR);
+        return ret;
+    }
+
+    /* Early data is over: the rest of the client flight is protected with the handshake key */
+    uint32_t hashLen = SAL_CRYPT_DigestSize(ctx->negotiatedInfo.cipherSuiteInfo.hashAlg);
+    if (hashLen == 0) {
+        return HITLS_CRYPT_ERR_DIGEST;
+    }
+    ret = HS_SwitchTrafficKey(ctx, ctx->hsCtx->clientHsTrafficSecret, hashLen, false);
+    if (ret != HITLS_SUCCESS) {
+        return ret;
+    }
+    return HS_ChangeState(ctx, TRY_RECV_FINISH);
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 int32_t Tls13ServerRecvFinishedProcess(TLS_Ctx *ctx, const HS_Msg *msg)
 {
     /** CCS messages are not allowed to be received */

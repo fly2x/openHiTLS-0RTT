@@ -30,6 +30,9 @@
 #include "hs_common.h"
 #include "hs_dtls_timer.h"
 #include "hs_verify.h"
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+#include "hs_kx.h"
+#endif
 #include "pack.h"
 #include "send_process.h"
 #include "session_mgr.h"
@@ -512,6 +515,144 @@ static int32_t Tls13ClientPreparePSK(TLS_Ctx *ctx)
     return HITLS_SUCCESS;
 }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+static bool AlpnListContainsProtocol(const uint8_t *alpnList, uint32_t alpnListSize,
+    const uint8_t *proto, uint32_t protoSize)
+{
+    uint32_t offset = 0;
+    while (offset < alpnListSize) {
+        uint8_t len = alpnList[offset];
+        offset++;
+        if (len == 0 || offset + len > alpnListSize) {
+            return false;
+        }
+        if (len == protoSize && memcmp(&alpnList[offset], proto, protoSize) == 0) {
+            return true;
+        }
+        offset += len;
+    }
+    return false;
+}
+
+/*
+ * RFC 8446 4.2.10: early data can only be offered together with the first PSK, using the
+ * parameters (cipher suite, ALPN) of the connection that issued the ticket, and never
+ * after a HelloRetryRequest. RFC 9001 4.6.1: QUIC requires max_early_data_size 0xffffffff.
+ */
+static bool Tls13ClientShouldOfferEarlyData(TLS_Ctx *ctx)
+{
+    HS_Ctx *hsCtx = ctx->hsCtx;
+    if (ctx->config.tlsConfig.maxEarlyDataSize == 0 ||
+        hsCtx->haveHrr || hsCtx->haveHvr || ctx->negotiatedInfo.isRenegotiation) {
+        return false;
+    }
+    /* TLS/DTLS: the offer needs the application's intent (HITLS_WriteEarlyData was called);
+     * QUIC drives 0-RTT from the QUIC stack, enabling it via config suffices */
+    if (!ctx->earlyDataIntent
+#ifdef HITLS_TLS_FEATURE_QUIC_TLS
+        && !QUIC_TLS_IsMode(ctx)
+#endif
+    ) {
+        return false;
+    }
+    HITLS_Session *sess = hsCtx->kxCtx->pskInfo13.resumeSession;
+    if (sess == NULL) {
+        return false;
+    }
+    uint32_t sessMaxEarlyData = SESS_GetMaxEarlyData(sess);
+    if (sessMaxEarlyData == 0) {
+        return false;
+    }
+#ifdef HITLS_TLS_FEATURE_QUIC_TLS
+    if (QUIC_TLS_IsMode(ctx) && sessMaxEarlyData != HITLS_QUIC_MAX_EARLY_DATA_REQUIRED) {
+        return false;
+    }
+#endif
+    /* If the original connection negotiated an ALPN protocol, the offer must still contain it */
+    const uint8_t *sessAlpn = NULL;
+    uint32_t sessAlpnSize = 0;
+    (void)SESS_GetAlpnSelected(sess, &sessAlpn, &sessAlpnSize);
+    if (sessAlpnSize != 0 &&
+        !AlpnListContainsProtocol(ctx->config.tlsConfig.alpnList, ctx->config.tlsConfig.alpnListSize,
+            sessAlpn, sessAlpnSize)) {
+        return false;
+    }
+    return true;
+}
+
+/*
+ * Runs once, right after the first ClientHello with the early_data extension went out:
+ * optionally emit the middlebox CCS (it must precede any protected record), then derive
+ * and activate the client_early_traffic_secret for writing (DTLS 1.3: epoch 1).
+ */
+static int32_t Tls13ClientStartEarlyData(TLS_Ctx *ctx)
+{
+    HS_Ctx *hsCtx = ctx->hsCtx;
+    if (!hsCtx->earlyDataOffered || ctx->earlyDataState != TLS_EARLY_DATA_NOT_SENT) {
+        return HITLS_SUCCESS;
+    }
+    HITLS_Session *sess = hsCtx->kxCtx->pskInfo13.resumeSession;
+
+    /* The record keys have to be derived with the ticket's cipher suite before the
+     * ServerHello fixes the negotiated one. */
+    uint16_t cipherSuite = 0;
+    (void)HITLS_SESS_GetCipherSuite(sess, &cipherSuite);
+    int32_t ret = CFG_GetCipherSuiteInfo(cipherSuite, &ctx->negotiatedInfo.cipherSuiteInfo);
+    if (ret != HITLS_SUCCESS) {
+        return ret;
+    }
+
+    uint8_t psk[HS_PSK_MAX_LEN] = {0};
+    uint32_t pskLen = HS_PSK_MAX_LEN;
+    ret = HITLS_SESS_GetMasterKey(sess, psk, &pskLen);
+    if (ret != HITLS_SUCCESS) {
+        return ret;
+    }
+    ret = HS_TLS13DeriveClientEarlyTrafficSecret(ctx, psk, pskLen);
+    BSL_SAL_CleanseData(psk, HS_PSK_MAX_LEN);
+    if (ret != HITLS_SUCCESS) {
+        return ret;
+    }
+    uint32_t hashLen = SAL_CRYPT_DigestSize(ctx->negotiatedInfo.cipherSuiteInfo.hashAlg);
+    if (hashLen == 0) {
+        return HITLS_CRYPT_ERR_DIGEST;
+    }
+
+    /* The initial ClientHello is out: every further record of this flight (compat CCS, 0-RTT
+     * data) must carry the 0x0303 legacy record version (rfc 8446 5.1), which the record
+     * layer keys off this state. */
+    ctx->earlyDataState = TLS_EARLY_DATA_SENDING;
+
+    if (ctx->config.tlsConfig.isMiddleBoxCompat &&
+        !IS_SUPPORT_DATAGRAM(ctx->config.tlsConfig.originVersionMask)
+#ifdef HITLS_TLS_FEATURE_QUIC_TLS
+        && !QUIC_TLS_IsMode(ctx)
+#endif
+    ) {
+        /* On a busy transport the CCS record is already queued in the record out-buffer and will
+         * be flushed ahead of the early data, so it must not be re-sent on retry. */
+        ret = ctx->method.sendCCS(ctx);
+        if (ret != HITLS_SUCCESS && ret != HITLS_REC_NORMAL_IO_BUSY) {
+            ctx->earlyDataState = TLS_EARLY_DATA_NOT_SENT;
+            return ret;
+        }
+        hsCtx->earlyCcsSent = true;
+    }
+
+#if defined(HITLS_TLS_PROTO_DTLS13)
+    if (IS_SUPPORT_DATAGRAM(ctx->config.tlsConfig.originVersionMask)) {
+        REC_Dtls13SetEarlyDataEpoch(ctx, true);
+    }
+#endif
+    ret = HS_SwitchTrafficKey(ctx, hsCtx->earlyTrafficSecret, hashLen, true);
+    if (ret != HITLS_SUCCESS) {
+        ctx->earlyDataState = TLS_EARLY_DATA_NOT_SENT;
+        return ret;
+    }
+    return HITLS_SUCCESS;
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 int32_t Tls13ClientHelloPrepare(TLS_Ctx *ctx)
 {
     int32_t ret = HITLS_SUCCESS;
@@ -538,7 +679,12 @@ int32_t Tls13ClientHelloPrepare(TLS_Ctx *ctx)
             }
         }
     } else if (ctx->config.tlsConfig.isMiddleBoxCompat &&
-        !IS_SUPPORT_DATAGRAM(ctx->config.tlsConfig.originVersionMask)) {
+        !IS_SUPPORT_DATAGRAM(ctx->config.tlsConfig.originVersionMask)
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+        /* With 0-RTT, the single compat CCS was already sent right after the first ClientHello */
+        && !hsCtx->earlyCcsSent
+#endif
+    ) {
         /* If the middlebox is used, a CCS message must be sent before the second clientHello message is sent */
         ret = ctx->method.sendCCS(ctx);
         if (ret != HITLS_SUCCESS) {
@@ -575,6 +721,9 @@ int32_t Tls13ClientHelloPrepare(TLS_Ctx *ctx)
     }
     ctx->negotiatedInfo.tls13BasicKeyExMode = tls13BasicKeyExMode;
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    hsCtx->earlyDataOffered = Tls13ClientShouldOfferEarlyData(ctx);
+#endif
     return HITLS_SUCCESS;
 }
 
@@ -702,6 +851,12 @@ int32_t Tls13ClientSendClientHelloProcess(TLS_Ctx *ctx)
 
     BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15634, BSL_LOG_LEVEL_INFO, BSL_LOG_BINLOG_TYPE_RUN,
         "send (d)tls1.3 client hello success.", 0, 0, 0, 0);
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    ret = Tls13ClientStartEarlyData(ctx);
+    if (ret != HITLS_SUCCESS) {
+        return ret;
+    }
+#endif
 #ifdef HITLS_TLS_PROTO_DTLS13
     ret = HS_StartTimer(ctx);
     if (ret != HITLS_SUCCESS) {

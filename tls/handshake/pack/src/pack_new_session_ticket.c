@@ -24,6 +24,10 @@
 #include "tls.h"
 #include "hs_ctx.h"
 #include "custom_extensions.h"
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+#include "hs_extensions.h"
+#include "session.h"
+#endif
 
 #if defined(HITLS_TLS_PROTO_TLS_BASIC) || defined(HITLS_TLS_PROTO_DTLS12)
 int32_t PackNewSessionTicket(const TLS_Ctx *ctx, PackPacket *pkt)
@@ -93,6 +97,17 @@ int32_t Tls13PackNewSessionTicket(const TLS_Ctx *ctx, PackPacket *pkt)
         return ret;
     }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    /* rfc 8446 4.6.1: announce max_early_data_size when the server allows 0-RTT with this ticket */
+    if (SESS_GetMaxEarlyData(ctx->session) > 0) {
+        ret = PackAppendUint16ToBuf(pkt, HS_EX_TYPE_EARLY_DATA);
+        if (ret != HITLS_SUCCESS) {
+            return ret;
+        }
+        (void)PackAppendUint16ToBuf(pkt, (uint16_t)sizeof(uint32_t));
+        (void)PackAppendUint32ToBuf(pkt, SESS_GetMaxEarlyData(ctx->session));
+    }
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
 #ifdef HITLS_TLS_FEATURE_CUSTOM_EXTENSION
     if (IsPackNeedCustomExtensions(CUSTOM_EXT_FROM_CTX(ctx), HITLS_EX_TYPE_TLS1_3_NEW_SESSION_TICKET)) {
         ret = PackCustomExtensions(ctx, pkt, HITLS_EX_TYPE_TLS1_3_NEW_SESSION_TICKET, NULL, 0);

@@ -1004,6 +1004,19 @@ int32_t Tls13ClientRecvHelloRetryRequestProcess(TLS_Ctx *ctx, const HS_Msg *msg)
         return ret;
     }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    /* rfc 8446 4.1.4: a HelloRetryRequest implicitly rejects early data; the second
+     * ClientHello goes out unprotected again and must not contain the early_data extension */
+    if (ctx->earlyDataState == TLS_EARLY_DATA_SENDING) {
+        ctx->earlyDataState = TLS_EARLY_DATA_REJECTED;
+        ctx->hsCtx->earlyDataOffered = false;
+        REC_ClearPendingAppData(ctx);
+        ret = REC_TLS13RestorePlaintextWriteState(ctx);
+        if (ret != HITLS_SUCCESS) {
+            return ret;
+        }
+    }
+#endif
     return HS_ChangeState(ctx, TRY_SEND_CLIENT_HELLO);
 }
 static int32_t CheckDowngradeRandom(TLS_Ctx *ctx, const ServerHelloMsg *serverHello, uint16_t *negotiatedVersion)

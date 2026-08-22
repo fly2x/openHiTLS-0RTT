@@ -113,6 +113,46 @@ uint32_t HITLS_GetTicketNums(HITLS_Ctx *ctx);
 
 /**
  * @ingroup hitls_session
+ * @brief   Set the TLS1.3 0-RTT early data limit, in bytes.
+ * @details Server: a nonzero value enables 0-RTT — every NewSessionTicket then carries an
+ *          early_data extension advertising this max_early_data_size, and the server accepts at
+ *          most this much early data on resumption. Client: a nonzero value allows offering
+ *          early data via HITLS_WriteEarlyData when resuming with a ticket that permits it.
+ *          The default is 0: 0-RTT disabled.
+ * @attention Early data is not forward secret and is replayable by an attacker
+ *          (RFC 8446 Appendix E.5); the application must only send/accept idempotent,
+ *          replay-tolerant data in 0-RTT.
+ * @param   config           [OUT] Config handle
+ * @param   maxEarlyDataSize [IN] Maximum early data in bytes; 0 disables 0-RTT.
+ * @retval  HITLS_SUCCESS, if successful.
+ * @retval  HITLS_NULL_INPUT, config is null.
+ */
+int32_t HITLS_CFG_SetMaxEarlyDataSize(HITLS_Config *config, uint32_t maxEarlyDataSize);
+
+/**
+ * @ingroup hitls_session
+ * @brief   Obtain the configured TLS1.3 0-RTT early data limit.
+ *
+ * @param   config           [IN] Config handle
+ * @param   maxEarlyDataSize [OUT] Configured limit in bytes; 0 means 0-RTT is disabled.
+ * @retval  HITLS_SUCCESS, if successful.
+ * @retval  HITLS_NULL_INPUT, an input parameter is null.
+ */
+int32_t HITLS_CFG_GetMaxEarlyDataSize(const HITLS_Config *config, uint32_t *maxEarlyDataSize);
+
+/**
+ * @ingroup hitls_session
+ * @brief   Obtain the max_early_data_size a session's ticket permits for 0-RTT.
+ *
+ * @param   sess         [IN] Session handle
+ * @param   maxEarlyData [OUT] Advertised max_early_data_size; 0 means the ticket does not allow 0-RTT.
+ * @retval  HITLS_SUCCESS, if successful.
+ * @retval  HITLS_NULL_INPUT, an input parameter is null.
+ */
+int32_t HITLS_SESS_GetMaxEarlyData(const HITLS_Session *sess, uint32_t *maxEarlyData);
+
+/**
+ * @ingroup hitls_session
  * @brief   This callback is called when a new session is negotiated. Users can use sessions.
  *
  * @param   ctx     [IN] ctx context

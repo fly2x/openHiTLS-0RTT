@@ -167,6 +167,13 @@ void DtlsPlainMsgGenerate(REC_TextInput *plainMsg, const TLS_Ctx *ctx,
             plainMsg->version = HITLS_VERSION_DTLS12;
         }
     }
+#if defined(HITLS_TLS_FEATURE_EARLY_DATA) && defined(HITLS_TLS_PROTO_DTLS13)
+    /* 0-RTT: epoch-1 records written before version negotiation completes are DTLS 1.3
+     * records in every aspect (AAD, nonce, inner plaintext) */
+    if (ctx->negotiatedInfo.version == 0 && IS_DTLS13_CTX(ctx) && REC_EPOCH_GET(epochSeq) > 0) {
+        plainMsg->negotiatedVersion = HITLS_VERSION_DTLS13;
+    }
+#endif
 
     BSL_Uint64ToByte(epochSeq, plainMsg->seq);
 }
@@ -226,7 +233,7 @@ static inline int32_t DtlsRecordHeaderPack(TLS_Ctx *ctx, uint8_t *outBuf, REC_Ty
     (void)cipherTextLen;
     uint16_t epoch = RecConnGetEpoch(state);
 #ifdef HITLS_TLS_PROTO_DTLS13
-    if (ctx->negotiatedInfo.version == HITLS_VERSION_DTLS13 && epoch > 0) {
+    if (IS_DTLS13_CTX(ctx) && epoch > 0) {
         return Dtls13RecordHeaderPack(ctx, outBuf, state, cipherText, cipherTextLen, true);
     }
 #endif
@@ -285,7 +292,7 @@ static uint32_t RecGetWriteHeaderLen(const TLS_Ctx *ctx, RecConnState *state)
 #endif
     uint32_t headerLen = REC_DTLS_RECORD_HEADER_LEN;
 #ifdef HITLS_TLS_PROTO_DTLS13
-    if (ctx->negotiatedInfo.version == HITLS_VERSION_DTLS13 &&
+    if (IS_DTLS13_CTX(ctx) &&
         IS_SUPPORT_DATAGRAM(ctx->config.tlsConfig.originVersionMask) &&
         RecConnGetEpoch(state) > 0) {
         uint32_t cidLen = 0;
@@ -317,7 +324,7 @@ int32_t DtlsRecordWrite(TLS_Ctx *ctx, REC_Type recordType, const uint8_t *data, 
     uint32_t plainLen = num;
 #ifdef HITLS_TLS_PROTO_DTLS13
     RecordPlaintext recPlaintext = {0};
-    if (ctx->negotiatedInfo.version == HITLS_VERSION_DTLS13 && state->suiteInfo != NULL && RecConnGetEpoch(state) > 0) {
+    if (IS_DTLS13_CTX(ctx) && state->suiteInfo != NULL && RecConnGetEpoch(state) > 0) {
         ret = funcs->encryptPreProcess(ctx, recordType, data, num, &recPlaintext);
         if (ret != HITLS_SUCCESS) {
             return ret;
@@ -350,7 +357,7 @@ int32_t DtlsRecordWrite(TLS_Ctx *ctx, REC_Type recordType, const uint8_t *data, 
 #ifdef HITLS_TLS_PROTO_DTLS13
     /* DTLS 1.3 encryptPreProcess wraps the payload into DTLSInnerPlaintext and reports
      * APP as the outer record type. AAD must use that outer type to match the receiver. */
-    if (ctx->negotiatedInfo.version == HITLS_VERSION_DTLS13 && state->suiteInfo != NULL && RecConnGetEpoch(state) > 0) {
+    if (IS_DTLS13_CTX(ctx) && state->suiteInfo != NULL && RecConnGetEpoch(state) > 0) {
         plainType = recPlaintext.recordType;
     }
 #endif
@@ -371,7 +378,7 @@ int32_t DtlsRecordWrite(TLS_Ctx *ctx, REC_Type recordType, const uint8_t *data, 
     uint8_t *outBuf = &recordCtx->outBuf->buf[0];
 
 #ifdef HITLS_TLS_PROTO_DTLS13
-    if (ctx->negotiatedInfo.version == HITLS_VERSION_DTLS13 && RecConnGetEpoch(state) > 0) {
+    if (IS_DTLS13_CTX(ctx) && RecConnGetEpoch(state) > 0) {
         ret = Dtls13RecordHeaderPack(ctx, outBuf, state, NULL, cipherTextLen, false);
         if (ret != HITLS_SUCCESS) {
             BSL_SAL_ClearFree(recPlaintext.plainData, recPlaintext.plainLen);
@@ -481,6 +488,14 @@ static void TlsPlainMsgGenerate(REC_TextInput *plainMsg, const TLS_Ctx *ctx,
     plainMsg->text = data;
     plainMsg->textLen = plainLen;
     plainMsg->negotiatedVersion = ctx->negotiatedInfo.version;
+#if defined(HITLS_TLS_FEATURE_EARLY_DATA) && defined(HITLS_TLS_PROTO_TLS13)
+    /* 0-RTT records are protected under the early traffic keys before version negotiation
+     * completes; they are TLS 1.3 records in every aspect (AAD, nonce, inner plaintext). */
+    if (ctx->negotiatedInfo.version == 0 && ctx->earlyDataState != TLS_EARLY_DATA_NOT_SENT &&
+        GetWriteConnState(ctx)->suiteInfo != NULL) {
+        plainMsg->negotiatedVersion = HITLS_VERSION_TLS13;
+    }
+#endif
 #ifdef HITLS_TLS_FEATURE_ETM
     plainMsg->isEncryptThenMac = GetWriteConnState(ctx)->isEncryptThenMac;
 #endif
@@ -504,6 +519,14 @@ static void TlsPlainMsgGenerate(REC_TextInput *plainMsg, const TLS_Ctx *ctx,
 #endif
         ctx->config.tlsConfig.maxVersion > HITLS_VERSION_TLS10) {
         plainMsg->version = HITLS_VERSION_TLS10;
+#if defined(HITLS_TLS_FEATURE_EARLY_DATA) && defined(HITLS_TLS_PROTO_TLS13)
+        /* rfc 8446 5.1: 0x0301 is only for the record holding the initial ClientHello; the
+         * compat CCS and the 0-RTT records that follow it before the ServerHello arrives
+         * must carry 0x0303 */
+        if (ctx->earlyDataState != TLS_EARLY_DATA_NOT_SENT) {
+            plainMsg->version = HITLS_VERSION_TLS12;
+        }
+#endif
     }
 
     BSL_Uint64ToByte(GetWriteConnState(ctx)->seq, plainMsg->seq);
@@ -530,6 +553,14 @@ static int32_t SendRecord(TLS_Ctx *ctx, RecCtx *recordCtx, RecConnState *state, 
     }
 #endif
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    /* The sequence advance belongs to the state that encrypted the flushed record; a stale
+     * record left over from before a key switch must not touch the new state's sequence. */
+    if (!recordCtx->outBufSeqBump) {
+        return HITLS_SUCCESS;
+    }
+    recordCtx->outBufSeqBump = false;
+#endif
     /** Add the record sequence */
     RecConnSetSeqNum(state, seq + 1);
     return HITLS_SUCCESS;
@@ -639,6 +670,9 @@ int32_t TlsRecordWrite(TLS_Ctx *ctx, REC_Type recordType, const uint8_t *data, u
                               ctx->config.tlsConfig.msgArg);
 #endif
     OutbufUpdate(&writeBuf->start, 0, &writeBuf->end, outBufLen);
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    ctx->recCtx->outBufSeqBump = true;
+#endif
 
     return SendRecord(ctx, ctx->recCtx, state, state->seq, recordType);
 }

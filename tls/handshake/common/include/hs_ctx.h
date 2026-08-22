@@ -176,6 +176,13 @@ struct HsCtx {
     uint8_t earlySecret[MAX_DIGEST_SIZE];
     uint8_t handshakeSecret[MAX_DIGEST_SIZE];
 #endif
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    uint8_t earlyTrafficSecret[MAX_DIGEST_SIZE]; /* TLS1.3 client_early_traffic_secret; the array address also
+                                                    identifies the EARLY_DATA level in QUIC mode */
+    bool earlyDataOffered;  /* client sent (or server received) early_data in this ClientHello */
+    bool earlyDataAccepted; /* early_data confirmed via EncryptedExtensions / local server acceptance */
+    bool earlyCcsSent;      /* client already sent the middlebox CCS right after the ClientHello */
+#endif
     uint8_t masterKey[MAX_DIGEST_SIZE];
     CERT_Pair *peerCert;
 #ifdef HITLS_TLS_FEATURE_ALPN

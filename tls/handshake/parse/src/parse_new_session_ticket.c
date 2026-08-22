@@ -19,6 +19,7 @@
 #include "bsl_log.h"
 #include "bsl_err_internal.h"
 #include "bsl_sal.h"
+#include "bsl_bytes.h"
 #include "hitls_error.h"
 #include "tls.h"
 #include "hs_msg.h"
@@ -112,6 +113,17 @@ static int32_t ParseNewSessionTicketExtension(TLS_Ctx *ctx, const uint8_t *buf, 
             msg->extensionTypeMask |= 1ULL << hsExTypeId;
         }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+        if (extMsgType == HS_EX_TYPE_EARLY_DATA) {
+            /* rfc 8446 4.6.1: the NewSessionTicket early_data extension carries max_early_data_size */
+            if (msg->haveEarlyData || extMsgLen != sizeof(uint32_t)) {
+                return ParseErrorProcess(ctx, HITLS_PARSE_INVALID_MSG_LEN, BINLOG_ID15206,
+                    BINGLOG_STR("bad NewSessionTicket early_data extension."), ALERT_DECODE_ERROR);
+            }
+            msg->maxEarlyDataSize = BSL_ByteToUint32(&buf[bufOffset]);
+            msg->haveEarlyData = true;
+        }
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
 #ifdef HITLS_TLS_FEATURE_CUSTOM_EXTENSION
         if (IsParseNeedCustomExtensions(CUSTOM_EXT_FROM_CTX(ctx),
             extMsgType, HITLS_EX_TYPE_TLS1_3_NEW_SESSION_TICKET)) {

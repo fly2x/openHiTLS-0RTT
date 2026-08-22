@@ -354,6 +354,10 @@ typedef struct {
     uint32_t ticketSize;
     uint8_t *ticket; /* ticket */
     uint64_t extensionTypeMask;
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    uint32_t maxEarlyDataSize; /* TLS1.3 early_data extension: max_early_data_size */
+    bool haveEarlyData;        /* whether the early_data extension is present */
+#endif
 } NewSessionTicketMsg;
 
 /* It is used to transmit finish message */

@@ -1,0 +1,32 @@
+TLS1.3 0-RTT accept: early data delivered and connection completes
+UT_TLS13_EARLY_DATA_ACCEPT_FUNC_TC001:
+
+TLS1.3 0-RTT offer: ClientHello carries the empty early_data extension
+UT_TLS13_EARLY_DATA_CH_EXTENSION_FUNC_TC001:
+
+TLS1.3 0-RTT reject: disabled server skips early data and completes
+UT_TLS13_EARLY_DATA_REJECT_SERVER_DISABLED_FUNC_TC001:
+
+TLS1.3 0-RTT: tickets without permission block the client offer
+UT_TLS13_EARLY_DATA_NST_NO_TICKET_PERMISSION_FUNC_TC001:
+
+TLS1.3 0-RTT: client enforces the ticket max_early_data_size
+UT_TLS13_EARLY_DATA_LIMIT_FUNC_TC001:
+
+0-RTT API misuse: wrong role, no session, null input
+UT_TLS13_EARLY_DATA_API_MISUSE_FUNC_TC001:
+
+TLS1.3 0-RTT: HelloRetryRequest implicitly rejects early data
+UT_TLS13_EARLY_DATA_HRR_REJECT_FUNC_TC001:
+
+TLS1.3 0-RTT anti-replay: stale obfuscated_ticket_age is rejected
+UT_TLS13_EARLY_DATA_TICKET_AGE_FUNC_TC001:
+
+TLS1.3 0-RTT: ALPN change blocks the 0-RTT offer
+UT_TLS13_EARLY_DATA_ALPN_MISMATCH_FUNC_TC001:
+
+DTLS1.3 0-RTT accept: early data flows at epoch 1 without EndOfEarlyData
+UT_DTLS13_EARLY_DATA_ACCEPT_FUNC_TC001:
+
+DTLS1.3 0-RTT reject: epoch-1 records dropped silently
+UT_DTLS13_EARLY_DATA_REJECT_FUNC_TC001:

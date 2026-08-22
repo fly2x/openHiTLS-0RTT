@@ -302,6 +302,13 @@ int32_t CommonEventInHandshakingState(HITLS_Ctx *ctx)
             break;
         }
         if (ret == HITLS_REC_NORMAL_RECV_UNEXPECT_MSG && REC_GetUnexpectedMsgType(ctx) == REC_TYPE_APP) {
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+            if (ctx->earlyDataState == TLS_EARLY_DATA_ACCEPTED && ctx->hsCtx != NULL) {
+                /* Accepted 0-RTT: the record layer buffered early application data that
+                 * HITLS_ReadEarlyData will drain; hand control back to the caller. */
+                return ret;
+            }
+#endif
             BSL_LOG_BINLOG_FIXLEN(BINLOG_ID16489, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
                 "The app message is received in the handshake state", 0, 0, 0, 0);
             ctx->method.sendAlert(ctx, ALERT_LEVEL_FATAL, ALERT_UNEXPECTED_MESSAGE);

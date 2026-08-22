@@ -61,4 +61,10 @@ if(HITLS_TLS_FEATURE_QUIC_TLS)
         ${PROJECT_SOURCE_DIR}/tls/feature/quic_tls/include)
 endif()
 
+if(HITLS_TLS_FEATURE_EARLY_DATA)
+    # 0-RTT reject-skip withdraws a queued bad_record_mac alert (alert.h)
+    target_include_directories(_hitls_tls_record PRIVATE
+        ${PROJECT_SOURCE_DIR}/tls/alert/include)
+endif()
+
 hitls_register_objects(TLS _hitls_tls_record)

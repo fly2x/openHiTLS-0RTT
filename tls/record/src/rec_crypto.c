@@ -105,7 +105,12 @@ static int32_t DefaultEncryptPreProcess(TLS_Ctx *ctx, uint8_t recordType, const 
     recPlaintext->plainLen = plainLen;
     recPlaintext->plainData = NULL;
 #if defined(HITLS_TLS_PROTO_TLS13_FAMILY)
-    if (!IS_TLS13_FAMILY_CTX(ctx) ||
+    bool earlyDataWrite = false;
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    /* 0-RTT: the client writes TLS 1.3 protected records before version negotiation completes */
+    earlyDataWrite = (ctx->negotiatedInfo.version == 0 && ctx->earlyDataState != TLS_EARLY_DATA_NOT_SENT);
+#endif
+    if ((!IS_TLS13_FAMILY_CTX(ctx) && !earlyDataWrite) ||
         ctx->recCtx->writeStates.currentState->suiteInfo == NULL) {
         return HITLS_SUCCESS;
     }

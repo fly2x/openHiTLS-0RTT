@@ -423,7 +423,8 @@ int32_t RecTLS13ConnKeyBlockGen(const TLS_Ctx *ctx, const REC_SecParameters *par
     deriveInfo.libCtx = LIBCTX_FROM_CTX(ctx);
     deriveInfo.attrName = ATTRIBUTE_FROM_CTX(ctx);
 #ifdef HITLS_TLS_PROTO_DTLS13
-    if (ctx->negotiatedInfo.version == HITLS_VERSION_DTLS13) {
+    /* IS_DTLS13_CTX also covers 0-RTT early keys generated before version negotiation completes */
+    if (IS_DTLS13_CTX(ctx)) {
         deriveInfo.labelPrefix = (const uint8_t *)CRYPT_DTLS13_HKDF_LABEL_PREFIX;
         deriveInfo.labelPrefixLen = CRYPT_DTLS13_HKDF_LABEL_PREFIX_LEN;
     }
@@ -444,7 +445,7 @@ int32_t RecTLS13ConnKeyBlockGen(const TLS_Ctx *ctx, const REC_SecParameters *par
         return ret;
     }
 #ifdef HITLS_TLS_PROTO_DTLS13
-    if (ctx->negotiatedInfo.version == HITLS_VERSION_DTLS13) {
+    if (IS_DTLS13_CTX(ctx)) {
         ret = RecTLS13CalcSnKey(&deriveInfo, suitInfo->snKey, keyLen);
         if (ret != HITLS_SUCCESS) {
             BSL_LOG_BINLOG_FIXLEN(BINLOG_ID17237, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,

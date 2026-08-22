@@ -428,6 +428,28 @@ uint32_t HITLS_CFG_GetTicketNums(HITLS_Config *config)
     return config->ticketNums;
 }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+int32_t HITLS_CFG_SetMaxEarlyDataSize(HITLS_Config *config, uint32_t maxEarlyDataSize)
+{
+    if (config == NULL) {
+        return HITLS_NULL_INPUT;
+    }
+
+    config->maxEarlyDataSize = maxEarlyDataSize;
+    return HITLS_SUCCESS;
+}
+
+int32_t HITLS_CFG_GetMaxEarlyDataSize(const HITLS_Config *config, uint32_t *maxEarlyDataSize)
+{
+    if (config == NULL || maxEarlyDataSize == NULL) {
+        return HITLS_NULL_INPUT;
+    }
+
+    *maxEarlyDataSize = config->maxEarlyDataSize;
+    return HITLS_SUCCESS;
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 int32_t HITLS_CFG_SetSessionTicketSupport(HITLS_Config *config, bool support)
 {
     if (config == NULL) {

@@ -28,6 +28,11 @@
 extern "C" {
 #endif
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+/* An ALPN protocol name is at most 255 bytes (RFC 7301) */
+#define HITLS_SESSION_ALPN_MAX_SIZE 255u
+#endif
+
 struct TlsSessionManager {
     void *lock;                                            /* Thread lock */
     int32_t references;                                    /* Reference times */
@@ -84,6 +89,13 @@ struct TlsSessCtx {
     uint8_t *ticket;                                    /* Session ticket */
     uint32_t ticketLifetime;                            /* Timeout interval of the ticket */
     uint32_t ticketAgeAdd;                              /* A random number generated each time a ticket is issued */
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    uint32_t maxEarlyData;                              /* TLS1.3 max_early_data_size from the NewSessionTicket
+                                                           early_data extension; 0 means 0-RTT is not allowed */
+    uint32_t alpnSelectedSize;                          /* Length of the ALPN protocol of the original connection */
+    uint8_t alpnSelected[HITLS_SESSION_ALPN_MAX_SIZE];  /* ALPN protocol negotiated on the original connection;
+                                                           0-RTT requires the resumed connection to select the same */
+#endif
     void *userData;
 };
 

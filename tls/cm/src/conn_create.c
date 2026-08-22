@@ -268,6 +268,14 @@ int32_t HITLS_Clear(HITLS_Ctx *ctx)
     ctx->state = CM_STATE_IDLE;
     ctx->shutdownState = 0;
     ctx->haveClientPointFormats = false;
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    ctx->earlyDataState = TLS_EARLY_DATA_NOT_SENT;
+    ctx->earlyDataWritten = 0;
+    ctx->earlyDataRead = 0;
+    ctx->earlyPendingData = NULL;
+    ctx->earlyPendingLen = 0;
+    ctx->earlyDataIntent = false;
+#endif
 #ifdef HITLS_TLS_PROTO_DTLS13
     ctx->dtls13NextSendSeq = 0;
     ctx->dtls13ExpectRecvSeq = 0;

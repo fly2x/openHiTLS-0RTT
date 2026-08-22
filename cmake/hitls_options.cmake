@@ -531,6 +531,7 @@ option(HITLS_TLS_FEATURE                                       "TLS Feature" OFF
   option(HITLS_TLS_FEATURE_CUSTOM_REC_TYPE                       "TLS Feature Custom Record Type" OFF)
   option(HITLS_TLS_FEATURE_DTLS_CID                            "TLS Feature DTLS Connection ID (RFC 9146/9147)" OFF)
   option(HITLS_TLS_FEATURE_QUIC_TLS                               "TLS Feature QUIC-TLS push API (RFC 9001)" OFF)
+  option(HITLS_TLS_FEATURE_EARLY_DATA                             "TLS Feature 0-RTT Early Data (RFC 8446/9147/9001)" OFF)
 
 ## TLS Proto Module
 option(HITLS_TLS_PROTO                                         "TLS Proto Module" OFF)

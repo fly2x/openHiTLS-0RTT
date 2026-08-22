@@ -995,7 +995,12 @@ static int32_t PackClientExtensions(const TLS_Ctx *ctx, PackPacket *pkt)
         { EXTENSION_MSG(HS_EX_TYPE_CONNECTION_ID, DTLS_CID_NeedCidExtForClientHello(ctx), PackDtlsConnectionId) },
 #endif /* HITLS_TLS_FEATURE_DTLS_CID */
 #endif /* HITLS_TLS_PROTO_TLS13_FAMILY */
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+        /* Decided in Tls13ClientHelloPrepare: empty early_data extension for 0-RTT offers */
+        { EXTENSION_MSG(HS_EX_TYPE_EARLY_DATA, ctx->hsCtx->earlyDataOffered, NULL) },
+#else
         { EXTENSION_MSG(HS_EX_TYPE_EARLY_DATA, false, NULL) },
+#endif
 #if defined(HITLS_TLS_PROTO_TLS13_FAMILY)
         { EXTENSION_MSG(HS_EX_TYPE_COOKIE, isTls13, PackCookie) },
 #ifdef HITLS_TLS_FEATURE_PHA
@@ -1054,6 +1059,9 @@ static int32_t PackClientExtensions(const TLS_Ctx *ctx, PackPacket *pkt)
 #ifdef HITLS_TLS_FEATURE_PHA
     ctx->hsCtx->extFlag.havePostHsAuth = isNeedPha;
 #endif /* HITLS_TLS_FEATURE_PHA */
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    ctx->hsCtx->extFlag.haveEarlyData = ctx->hsCtx->earlyDataOffered;
+#endif
 #ifdef HITLS_TLS_FEATURE_EXTENDED_MASTER_SECRET
     ctx->hsCtx->extFlag.haveExtendedMasterSecret = (tlsConfig->emsMode != HITLS_EMS_MODE_FORBID);
 #endif

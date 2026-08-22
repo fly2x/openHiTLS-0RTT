@@ -25,6 +25,9 @@
 #include "bsl_uio.h"
 #include "rec_alert.h"
 #include "tls_config.h"
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+#include "alert.h"
+#endif
 #include "record.h"
 #include "rec_header.h"
 #ifdef HITLS_TLS_FEATURE_INDICATOR
@@ -791,6 +794,13 @@ int32_t Dtls13ReconstructEpoch(TLS_Ctx *ctx, uint8_t epochBits, uint64_t *recons
             *reconstructedEpoch = 3;
             return HITLS_SUCCESS;
         }
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+        /* 0-RTT: epoch-1 records remain readable through the outdated state at epoch 2 */
+        if (currentEpoch == 2 && epochBits == 1) {
+            *reconstructedEpoch = 1;
+            return HITLS_SUCCESS;
+        }
+#endif
         if (epochBits == 2) {
             *reconstructedEpoch = 2;
             return HITLS_SUCCESS;
@@ -1108,6 +1118,16 @@ static int32_t Dtls13HandleDifferentEpochRecord(TLS_Ctx *ctx, RecCtx *recordCtx,
     if (recordCtx->readEpoch == 2 && epoch == 3) {
         return RecordBufferUnprocessedMsg(recordCtx, hdr, recordBody);
     }
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    /* 0-RTT accepted: the epoch-1 read state lives on as the outdated state after the
+     * handshake-epoch activation, so keep decrypting late early-data records with it. */
+    if (recordCtx->readEpoch == 2 && epoch == 1 && !ctx->isClient) {
+        RecConnState *outdated = GetReadOutdatedState(ctx);
+        if (outdated != NULL && RecConnGetEpoch(outdated) == 1) {
+            return HITLS_SUCCESS;
+        }
+    }
+#endif
     if (((recordCtx->readEpoch > 3 && recordCtx->readEpoch - 1 == epoch) ||
         (recordCtx->readEpoch == 2 && epoch == 0 && !ctx->isClient)) &&
         GetReadConnState(ctx)->window.window == 0) {
@@ -1766,6 +1786,32 @@ int32_t RecordDecryptPrepare(TLS_Ctx *ctx, uint16_t version, REC_Type recordType
     return HITLS_SUCCESS;
 }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+/*
+ * RFC 8446 4.2.10: a server that rejects 0-RTT skips records that fail deprotection, up to the
+ * max_early_data_size it advertised. Returns true when the failed record was consumed and skipped;
+ * the queued fatal bad_record_mac alert is withdrawn in that case.
+ */
+static bool RecEarlyDataTrySkip(TLS_Ctx *ctx, int32_t decryptRet, const REC_TextInput *encryptedMsg)
+{
+    RecCtx *recordCtx = (RecCtx *)ctx->recCtx;
+    if (!recordCtx->earlyDataSkipArmed || decryptRet != HITLS_REC_BAD_RECORD_MAC ||
+        encryptedMsg->type != REC_TYPE_APP) {
+        return false;
+    }
+    if (encryptedMsg->textLen > recordCtx->earlyDataSkipBytes) {
+        /* Allowance exhausted: stop skipping so the fatal alert stands. */
+        recordCtx->earlyDataSkipArmed = false;
+        BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15442, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+            "0-RTT reject skip: early data exceeds max_early_data_size.", 0, 0, 0, 0);
+        return false;
+    }
+    recordCtx->earlyDataSkipBytes -= encryptedMsg->textLen;
+    ALERT_CleanInfo(ctx);
+    return true;
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 /**
  * @brief Read a record in the TLS protocol.
  * @attention: Handle record and handle transporting state to receive unexpected record type messages
@@ -1804,8 +1850,37 @@ int32_t TlsRecordRead(TLS_Ctx *ctx, REC_Type recordType, uint8_t *data, uint32_t
     decryptBuf.bufSize = num;
     ret = RecordDecrypt(ctx, &decryptBuf, &encryptedMsg, NULL);
     if (ret != HITLS_SUCCESS) {
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+        if (RecEarlyDataTrySkip(ctx, ret, &encryptedMsg)) {
+            /* Rejected early data record consumed and dropped; ask the caller to read on. */
+            return HITLS_REC_NORMAL_RECV_BUF_EMPTY;
+        }
+#endif
         return ret;
     }
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    {
+        RecCtx *recordCtx = (RecCtx *)ctx->recCtx;
+        if (recordCtx->earlyDataSkipArmed) {
+            if (GetReadConnState(ctx)->suiteInfo == NULL && encryptedMsg.type == REC_TYPE_APP) {
+                /* Post-HelloRetryRequest: rejected early-data records arrive while the second
+                 * ClientHello is still expected in plaintext. Drop them within the allowance. */
+                if (encryptedMsg.textLen <= recordCtx->earlyDataSkipBytes) {
+                    recordCtx->earlyDataSkipBytes -= encryptedMsg.textLen;
+                    FreeHeldRecordBuf(&decryptBuf);
+                    return HITLS_REC_NORMAL_RECV_BUF_EMPTY;
+                }
+                recordCtx->earlyDataSkipArmed = false;
+                FreeHeldRecordBuf(&decryptBuf);
+                return RecordSendAlertMsg(ctx, ALERT_LEVEL_FATAL, ALERT_UNEXPECTED_MESSAGE);
+            }
+            if (GetReadConnState(ctx)->suiteInfo != NULL) {
+                /* The first successfully deprotected record ends the reject-skip phase. */
+                recordCtx->earlyDataSkipArmed = false;
+            }
+        }
+    }
+#endif
 #ifdef HITLS_TLS_PROTO_DFX_ALERT_NUMBER
     ctx->method.clearAlert(ctx, encryptedMsg.type);
 #endif

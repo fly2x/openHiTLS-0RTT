@@ -104,9 +104,15 @@ static int32_t PackEncryptedExs(const TLS_Ctx *ctx, PackPacket *pkt)
         {.exMsgType = HS_EX_TYPE_SUPPORTED_GROUPS,
          .needPack = true,
          .packFunc = PackEncryptedSupportedGroups},
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+        {.exMsgType = HS_EX_TYPE_EARLY_DATA,    /* rfc 8446 4.2.10: empty extension signals 0-RTT acceptance */
+         .needPack = ctx->hsCtx->earlyDataAccepted,
+         .packFunc = NULL},
+#else
         {.exMsgType = HS_EX_TYPE_EARLY_DATA,    /* This field is available only in 0-rrt mode */
          .needPack = false,
          .packFunc = NULL},
+#endif
 #ifdef HITLS_TLS_FEATURE_SNI
         {.exMsgType = HS_EX_TYPE_SERVER_NAME,    /* During extension, only empty SNI extensions are encapsulated. */
          .needPack = ctx->negotiatedInfo.isSniStateOK,

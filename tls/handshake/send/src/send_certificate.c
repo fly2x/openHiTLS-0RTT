@@ -96,6 +96,10 @@ int32_t Tls13ClientSendCertificateProcess(TLS_Ctx *ctx)
 #ifdef HITLS_TLS_FEATURE_PHA
                 && ctx->phaState != PHA_REQUESTED
 #endif /* HITLS_TLS_FEATURE_PHA */
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+                /* With 0-RTT, the single compat CCS was already sent right after the ClientHello */
+                && !ctx->hsCtx->earlyCcsSent
+#endif
              ) {
             ret = ctx->method.sendCCS(ctx);
             if (ret != HITLS_SUCCESS) {
@@ -103,6 +107,10 @@ int32_t Tls13ClientSendCertificateProcess(TLS_Ctx *ctx)
             }
         }
         if (ctx->negotiatedInfo.version != HITLS_VERSION_DTLS13 && ctx->phaState != PHA_REQUESTED
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+            /* Accepted 0-RTT: EndOfEarlyData processing already switched to the handshake key */
+            && ctx->earlyDataState != TLS_EARLY_DATA_ACCEPTED
+#endif
 #ifdef HITLS_TLS_FEATURE_QUIC_TLS
             /* QUIC installs this secret already at ServerHello; the per-level
              * install-once guard would reject the second install. */

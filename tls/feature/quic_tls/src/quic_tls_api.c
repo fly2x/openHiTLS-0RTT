@@ -292,6 +292,23 @@ int32_t HITLS_QUIC_TLS_SetTransportParams(HITLS_Ctx *ctx, const uint8_t *params,
     return HITLS_SUCCESS;
 }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+int32_t HITLS_QUIC_TLS_SetEarlyDataEnabled(HITLS_Ctx *ctx, bool enabled)
+{
+    if (ctx == NULL) {
+        return HITLS_NULL_INPUT;
+    }
+    TLS_Ctx *tlsCtx = (TLS_Ctx *)ctx;
+    if (!QUIC_TLS_IsMode(tlsCtx) || tlsCtx->state != CM_STATE_IDLE) {
+        return HITLS_MSG_HANDLE_STATE_ILLEGAL;
+    }
+    /* RFC 9001 Section 4.6.1: QUIC 0-RTT always advertises max_early_data_size 0xffffffff;
+     * the amount of 0-RTT data is governed by QUIC flow control, not by TLS. */
+    tlsCtx->config.tlsConfig.maxEarlyDataSize = enabled ? HITLS_QUIC_MAX_EARLY_DATA_REQUIRED : 0;
+    return HITLS_SUCCESS;
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 int32_t HITLS_QUIC_TLS_GetPeerTransportParams(const HITLS_Ctx *ctx, const uint8_t **params, size_t *paramsLen)
 {
     const TLS_Ctx *tlsCtx = (const TLS_Ctx *)ctx;

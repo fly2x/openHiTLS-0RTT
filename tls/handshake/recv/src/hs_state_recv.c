@@ -348,6 +348,10 @@ static int32_t Tls13ProcessReceivedHandshakeMsg(TLS_Ctx *ctx, HS_Msg *hsMsg)
         case TRY_RECV_KEY_UPDATE:
             return Tls13RecvKeyUpdateProcess(ctx, hsMsg);
 #endif
+#if defined(HITLS_TLS_FEATURE_EARLY_DATA) && defined(HITLS_TLS_HOST_SERVER)
+        case TRY_RECV_END_OF_EARLY_DATA:
+            return Tls13ServerRecvEndOfEarlyDataProcess(ctx, hsMsg);
+#endif
         case TRY_RECV_NEW_SESSION_TICKET:
             return Tls13ClientRecvNewSessionTicketProcess(ctx, hsMsg);
 #if defined(HITLS_TLS_PROTO_DTLS13) && defined(HITLS_TLS_FEATURE_DTLS_CID)

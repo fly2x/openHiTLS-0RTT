@@ -296,6 +296,10 @@ static int32_t Tls13ProcessSendHandshakeMsg(TLS_Ctx *ctx)
 #ifdef HITLS_TLS_HOST_SERVER
             return Tls13ServerSendFinishedProcess(ctx);
 #endif /* HITLS_TLS_HOST_SERVER */
+#if defined(HITLS_TLS_FEATURE_EARLY_DATA) && defined(HITLS_TLS_HOST_CLIENT)
+        case TRY_SEND_END_OF_EARLY_DATA:
+            return Tls13ClientSendEndOfEarlyDataProcess(ctx);
+#endif
 #ifdef HITLS_TLS_PROTO_TLS13
         case TRY_SEND_CHANGE_CIPHER_SPEC:
             return Tls13SendChangeCipherSpecProcess(ctx);

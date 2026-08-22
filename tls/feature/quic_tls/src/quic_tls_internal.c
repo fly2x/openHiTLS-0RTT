@@ -60,6 +60,9 @@ void QUIC_TLS_CtxReset(QUIC_TLS_Ctx *quicTlsCtx)
     quicTlsCtx->writeLevel = HITLS_QUIC_TLS_ENCRYPTION_LEVEL_INITIAL;
 
     quicTlsCtx->flightPending = false;
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    quicTlsCtx->earlySecretInstalled = false;
+#endif
 }
 
 /* Release all resources owned by the QUIC context and then destroy the context itself. */
@@ -126,11 +129,50 @@ static int32_t QuicTlsGetSecretLevel(TLS_Ctx *ctx, const uint8_t *secret, HITLS_
     return HITLS_CONFIG_UNSUPPORT;
 }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+/*
+ * Deliver the 0-RTT (EARLY_DATA level) traffic secret. Unlike the handshake/application
+ * levels this does NOT advance readLevel/writeLevel: QUIC carries no CRYPTO frames at the
+ * 0-RTT level (RFC 9001 s4.1.3), so the CRYPTO stream levels move INITIAL->HANDSHAKE->
+ * APPLICATION while the early secret is handed over out of band, once per direction.
+ */
+static int32_t QuicTlsSetEarlyTrafficSecret(TLS_Ctx *ctx, const uint8_t *secret, uint32_t secretLen, bool isOut)
+{
+    QUIC_TLS_Ctx *quicTlsCtx = ctx->quicTlsCtx;
+    if (quicTlsCtx->earlySecretInstalled) {
+        BSL_ERR_PUSH_ERROR(HITLS_MSG_HANDLE_STATE_ILLEGAL);
+        return HITLS_MSG_HANDLE_STATE_ILLEGAL;
+    }
+    const HITLS_Cipher *cipher = &ctx->negotiatedInfo.cipherSuiteInfo;
+    int32_t ret;
+    if (isOut) {
+        ret = quicTlsCtx->cbs.setWriteSecret((HITLS_Ctx *)ctx, HITLS_QUIC_TLS_ENCRYPTION_LEVEL_EARLY_DATA,
+            cipher, secret, secretLen, quicTlsCtx->callbackArg);
+    } else {
+        ret = quicTlsCtx->cbs.setReadSecret((HITLS_Ctx *)ctx, HITLS_QUIC_TLS_ENCRYPTION_LEVEL_EARLY_DATA,
+            cipher, secret, secretLen, quicTlsCtx->callbackArg);
+    }
+    if (ret != HITLS_SUCCESS) {
+        return QUIC_TLS_CallbackFailed(
+            isOut ? HITLS_QUIC_TLS_FUNC_SET_WRITE_SECRET : HITLS_QUIC_TLS_FUNC_SET_READ_SECRET, ret);
+    }
+    quicTlsCtx->earlySecretInstalled = true;
+    return HITLS_SUCCESS;
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 int32_t QUIC_TLS_SetTrafficSecret(TLS_Ctx *ctx, const uint8_t *secret, uint32_t secretLen, bool isOut)
 {
     if (!QUIC_TLS_IsMode(ctx) || secret == NULL || secretLen == 0) {
         return HITLS_MSG_HANDLE_STATE_ILLEGAL;
     }
+
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    /* The early traffic secret is level EARLY_DATA and bypasses the CRYPTO-level bookkeeping. */
+    if (ctx->hsCtx != NULL && secret == ctx->hsCtx->earlyTrafficSecret) {
+        return QuicTlsSetEarlyTrafficSecret(ctx, secret, secretLen, isOut);
+    }
+#endif
 
     /* Identify the QUIC level from the canonical TLS traffic-secret buffer passed by HS_SwitchTrafficKey. */
     HITLS_QUIC_TLS_EncryptionLevel level;

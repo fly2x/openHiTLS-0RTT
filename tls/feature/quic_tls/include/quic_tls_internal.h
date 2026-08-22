@@ -71,6 +71,9 @@ typedef struct QuicTlsCtx {
     HITLS_QUIC_TLS_EncryptionLevel readLevel; /* Current inbound CRYPTO encryption level. */
     HITLS_QUIC_TLS_EncryptionLevel writeLevel; /* Current level outbound handshake bytes belong to. */
     bool flightPending; /* Handshake bytes are buffered awaiting a flush. */
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    bool earlySecretInstalled; /* The EARLY_DATA-level secret was delivered (once per connection). */
+#endif
 } QUIC_TLS_Ctx;
 
 /**
