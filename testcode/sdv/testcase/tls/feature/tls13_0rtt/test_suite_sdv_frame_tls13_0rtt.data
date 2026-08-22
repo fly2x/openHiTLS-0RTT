@@ -25,6 +25,12 @@ UT_TLS13_EARLY_DATA_TICKET_AGE_FUNC_TC001:
 TLS1.3 0-RTT: ALPN change blocks the 0-RTT offer
 UT_TLS13_EARLY_DATA_ALPN_MISMATCH_FUNC_TC001:
 
+TLS1.3 0-RTT: pre-TLS1.3 ServerHello after 0-RTT offer fails the connection
+UT_TLS13_EARLY_DATA_VERSION_DOWNGRADE_FUNC_TC001:
+
+TLS1.3 0-RTT anti-replay: replayed ClientHello not accepted twice
+UT_TLS13_EARLY_DATA_REPLAY_FUNC_TC001:
+
 DTLS1.3 0-RTT accept: early data flows at epoch 1 without EndOfEarlyData
 UT_DTLS13_EARLY_DATA_ACCEPT_FUNC_TC001:
 

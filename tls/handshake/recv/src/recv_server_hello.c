@@ -1366,6 +1366,17 @@ int32_t Tls13ClientRecvServerHelloProcess(TLS_Ctx *ctx, const HS_Msg *msg)
     }
 #ifdef HITLS_TLS_PROTO_TLS_BASIC
     if (!IS_TLS13_FAMILY_VERSION(negotiatedVersion)) {
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+        /* rfc 8446 D.3: a client that attempts to send 0-RTT data MUST fail the connection if
+         * it receives a ServerHello with TLS 1.2 or older */
+        if (ctx->earlyDataState != TLS_EARLY_DATA_NOT_SENT) {
+            BSL_ERR_PUSH_ERROR(HITLS_MSG_HANDLE_ILLEGAL_EARLY_DATA);
+            BSL_LOG_BINLOG_FIXLEN(BINLOG_ID15187, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
+                "server negotiated a pre-TLS1.3 version after a 0-RTT offer.", 0, 0, 0, 0);
+            ctx->method.sendAlert(ctx, ALERT_LEVEL_FATAL, ALERT_ILLEGAL_PARAMETER);
+            return HITLS_MSG_HANDLE_ILLEGAL_EARLY_DATA;
+        }
+#endif
         /* The keyshare is prepared when the TLS1.3 clientHello message is sent, so the old memory needs to be freed
          * here first */
         HS_KeyExchCtxFree(ctx->hsCtx->kxCtx);

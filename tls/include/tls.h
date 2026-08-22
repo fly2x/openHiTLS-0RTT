@@ -391,6 +391,8 @@ struct TlsCtx {
     uint8_t earlyDataState;                 /* TLS_EarlyDataState: 0-RTT progress on this connection */
     uint32_t earlyDataWritten;              /* client: early data plaintext bytes written so far */
     uint32_t earlyDataRead;                 /* server: early data plaintext bytes accepted so far */
+    uint32_t earlyDataBuffered;             /* server: early data plaintext bytes buffered while the
+                                               handshake is driven without HITLS_ReadEarlyData */
     const uint8_t *earlyPendingData;        /* early record already staged in the flight buffer; only
                                                the transport flush is outstanding (must not re-encrypt) */
     uint32_t earlyPendingLen;               /* plaintext length of the staged early record */

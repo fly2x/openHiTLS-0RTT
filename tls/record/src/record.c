@@ -823,8 +823,10 @@ void REC_ClearPendingAppData(TLS_Ctx *ctx)
     recordCtx->pendingData = NULL;
     recordCtx->pendingDataSize = 0;
     recordCtx->pendingRecordType = 0;
-    ctx->earlyPendingData = NULL;
-    ctx->earlyPendingLen = 0;
+    /* ctx->earlyPendingData deliberately survives: the staged record still reaches the wire
+     * with the next flight, so a late HITLS_WriteEarlyData retry must report it as written
+     * instead of "never sent" (the connection's early-data status tells the application
+     * whether the peer processed it). */
 }
 
 #ifdef HITLS_TLS_PROTO_DTLS13

@@ -270,6 +270,17 @@ static int32_t ProcessDecryptedRecord(TLS_Ctx *ctx, uint32_t dataLen,
     /* The TLSPlaintext.length MUST NOT exceed 2^14. An endpoint that receives a record that exceeds
     this length MUST terminate the connection with a record_overflow alert */
     if (dataLen > REC_GetMaxReadSize(ctx)) {
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+        /* rfc 8446 4.2.10: a server that rejected 0-RTT via HelloRetryRequest skips protected
+         * application_data records while reading in plaintext; their ciphertext body may be up
+         * to 2^14+256 bytes (rfc 8446 5.2), so the plaintext length cap does not apply to them */
+        RecCtx *skipCtx = (RecCtx *)ctx->recCtx;
+        if (skipCtx->earlyDataSkipArmed && encryptedMsg->type == REC_TYPE_APP &&
+            GetReadConnState(ctx)->suiteInfo == NULL && dataLen <= skipCtx->earlyDataSkipBytes) {
+            skipCtx->earlyDataSkipBytes -= dataLen;
+            return HITLS_REC_NORMAL_RECV_BUF_EMPTY;
+        }
+#endif
         BSL_LOG_BINLOG_FIXLEN(BINLOG_ID16165, BSL_LOG_LEVEL_ERR, BSL_LOG_BINLOG_TYPE_RUN,
             "TLSPlaintext.length exceeds 2^14", 0, 0, 0, 0);
         return RecordSendAlertMsg(ctx, ALERT_LEVEL_FATAL, ALERT_RECORD_OVERFLOW);
@@ -615,6 +626,22 @@ static int32_t RecordUnexpectedMsg(TLS_Ctx *ctx, RecBuf *decryptBuf, REC_Type re
             ret = RecBufListAddBuffer(ctx->recCtx->hsRecList, decryptBuf);
             break;
         case REC_TYPE_APP:
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+            /* rfc 8446 4.2.10/4.6.1: bound the early data a server buffers while the handshake
+             * is driven without HITLS_ReadEarlyData; beyond the advertised max_early_data_size
+             * the connection is terminated with unexpected_message instead of growing the heap. */
+            if (!ctx->isClient && ctx->hsCtx != NULL && ctx->earlyDataState == TLS_EARLY_DATA_ACCEPTED) {
+                uint32_t maxEarly = ctx->config.tlsConfig.maxEarlyDataSize;
+                if (decryptBuf->end > maxEarly || ctx->earlyDataBuffered > maxEarly - decryptBuf->end) {
+                    if (decryptBuf->isHoldBuffer) {
+                        BSL_SAL_FREE(decryptBuf->buf);
+                    }
+                    BSL_ERR_PUSH_ERROR(HITLS_MSG_HANDLE_EARLY_DATA_LIMIT_EXCEEDED);
+                    return RecordSendAlertMsg(ctx, ALERT_LEVEL_FATAL, ALERT_UNEXPECTED_MESSAGE);
+                }
+                ctx->earlyDataBuffered += decryptBuf->end;
+            }
+#endif
             ret = RecBufListAddBuffer(ctx->recCtx->appRecList, decryptBuf);
             break;
         default:
@@ -1120,12 +1147,15 @@ static int32_t Dtls13HandleDifferentEpochRecord(TLS_Ctx *ctx, RecCtx *recordCtx,
     }
 #ifdef HITLS_TLS_FEATURE_EARLY_DATA
     /* 0-RTT accepted: the epoch-1 read state lives on as the outdated state after the
-     * handshake-epoch activation, so keep decrypting late early-data records with it. */
-    if (recordCtx->readEpoch == 2 && epoch == 1 && !ctx->isClient) {
+     * handshake-epoch activation, so keep decrypting late early-data records with it.
+     * 0-RTT rejected: no epoch-1 keys ever existed, so a late or reordered epoch-1 record
+     * is discarded silently (rfc 9147 4.2.1) instead of terminating the connection. */
+    if (recordCtx->readEpoch >= 2 && epoch == 1 && !ctx->isClient) {
         RecConnState *outdated = GetReadOutdatedState(ctx);
-        if (outdated != NULL && RecConnGetEpoch(outdated) == 1) {
+        if (recordCtx->readEpoch == 2 && outdated != NULL && RecConnGetEpoch(outdated) == 1) {
             return HITLS_SUCCESS;
         }
+        return HITLS_REC_NORMAL_RECV_BUF_EMPTY;
     }
 #endif
     if (((recordCtx->readEpoch > 3 && recordCtx->readEpoch - 1 == epoch) ||

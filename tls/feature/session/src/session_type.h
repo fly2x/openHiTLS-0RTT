@@ -51,6 +51,18 @@ struct TlsSessionManager {
     uint8_t ticketKeyName[HITLS_TICKET_KEY_NAME_SIZE];
     uint8_t ticketAesKey[HITLS_TICKET_KEY_SIZE];           /* aes key */
     uint8_t ticketHmacKey[HITLS_TICKET_KEY_SIZE];          /* hmac key */
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    /* rfc 8446 8: per-instance at-most-once acceptance of a 0-RTT handshake. The PSK binder is
+     * unique per ClientHello, so recording recently accepted binders for the freshness window
+     * implements the 8.2 ClientHello-recording mechanism with bounded memory. */
+#define SESSMGR_EARLY_REPLAY_SLOTS 256u
+#define SESSMGR_EARLY_REPLAY_ID_SIZE 16u
+    struct {
+        uint8_t id[SESSMGR_EARLY_REPLAY_ID_SIZE];          /* truncated binder of an accepted 0-RTT CH */
+        uint64_t expireSec;                                /* entry is dead once now >= expireSec */
+    } earlyReplay[SESSMGR_EARLY_REPLAY_SLOTS];
+    uint32_t earlyReplayNext;                              /* ring write index */
+#endif
 };
 
 struct TlsSessCtx {

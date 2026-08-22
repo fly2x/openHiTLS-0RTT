@@ -50,6 +50,17 @@ static int32_t TlsSendHandShakeMsg(TLS_Ctx *ctx)
     if (ret != HITLS_SUCCESS) {
         return ret;
     }
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+    /* An early-data record the application never finished retrying may still occupy the record
+     * out-buffer; it must reach the wire before a handshake record is written, or the record
+     * layer's flush-only retry path would swallow this message. */
+    if (ctx->recCtx != NULL && ((RecCtx *)ctx->recCtx)->pendingData != NULL) {
+        ret = REC_OutBufFlush(ctx);
+        if (ret != HITLS_SUCCESS) {
+            return ret;
+        }
+    }
+#endif
     uint32_t maxRecPayloadLen = 0;
     ret = REC_GetMaxWriteSize(ctx, &maxRecPayloadLen);
     if (ret != HITLS_SUCCESS) {

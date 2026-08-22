@@ -149,6 +149,26 @@ int32_t SESSMGR_DecryptSessionTicket(HITLS_Lib_Ctx *libCtx, const char *attrName
     const TLS_SessionMgr *sessMgr, HITLS_Session **sess, const uint8_t *ticketBuf,
     uint32_t ticketBufSize, bool *isTicketExcept);
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+/**
+ * @brief   0-RTT anti-replay (rfc 8446 8): record the identity of an accepted 0-RTT handshake
+ *          (its PSK binder, unique per ClientHello) and report whether it was seen before.
+ *          Entries live for holdSec seconds, covering the ticket-age freshness window, in a
+ *          bounded ring shared by every connection of the configuration.
+ *
+ * @param   mgr [IN] Session management context
+ * @param   id [IN] Unique handshake identity (the selected PSK binder)
+ * @param   idLen [IN] Identity length
+ * @param   nowSec [IN] Current time in seconds
+ * @param   holdSec [IN] Seconds to remember the identity
+ *
+ * @retval  true  First sighting: recorded, 0-RTT may be accepted
+ * @retval  false Replay (or unusable input): 0-RTT must fall back to 1-RTT
+ */
+bool SESSMGR_EarlyDataAntiReplayCheck(TLS_SessionMgr *mgr, const uint8_t *id, uint32_t idLen,
+    uint64_t nowSec, uint64_t holdSec);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

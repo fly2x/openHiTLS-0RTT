@@ -737,6 +737,131 @@ EXIT:
 /* END_CASE */
 
 /** @
+* @test     UT_TLS13_EARLY_DATA_VERSION_DOWNGRADE_FUNC_TC001
+* @title    TLS1.3 0-RTT: a pre-TLS1.3 ServerHello after a 0-RTT offer fails the connection.
+* @brief    1. Establish a 0-RTT-capable TLS1.3 session. Expect result 1.
+*           2. Resume with early data through a TLS1.2+1.3 client against a TLS1.2-only
+*              server. Expect result 2.
+* @expect   1. Session prepared.
+*           2. The client aborts the connection when the TLS1.2 ServerHello arrives
+*              (RFC 8446 D.3).
+@ */
+/* BEGIN_CASE */
+void UT_TLS13_EARLY_DATA_VERSION_DOWNGRADE_FUNC_TC001(void)
+{
+    FRAME_Init();
+    HITLS_Config *config = NewEarlyDataTls13Config(EARLY_DATA_TEST_MAX);
+    HITLS_Config *mixedConfig = HITLS_CFG_NewTLSConfig();
+    HITLS_Config *tls12Config = HITLS_CFG_NewTLS12Config();
+    FRAME_LinkObj *client = NULL;
+    FRAME_LinkObj *server = NULL;
+    HITLS_Session *session = NULL;
+    uint32_t writtenLen = 0;
+    ASSERT_TRUE(config != NULL && mixedConfig != NULL && tls12Config != NULL);
+    ASSERT_EQ(HITLS_CFG_SetMaxEarlyDataSize(mixedConfig, EARLY_DATA_TEST_MAX), HITLS_SUCCESS);
+    ASSERT_EQ(EarlyDataPrepareSession(config, config, &session), HITLS_SUCCESS);
+
+    client = FRAME_CreateLink(mixedConfig, BSL_UIO_TCP);
+    server = FRAME_CreateLink(tls12Config, BSL_UIO_TCP);
+    ASSERT_TRUE(client != NULL && server != NULL);
+    ASSERT_EQ(HITLS_SetSession(client->ssl, session), HITLS_SUCCESS);
+
+    /* Offer 0-RTT; the ClientHello goes out and the offer is pending */
+    ASSERT_EQ(HITLS_WriteEarlyData(client->ssl, g_earlyPayload, sizeof(g_earlyPayload), &writtenLen),
+        HITLS_REC_NORMAL_IO_BUSY);
+    ASSERT_EQ(FRAME_TrasferMsgBetweenLink(client, server), HITLS_SUCCESS);
+    int32_t ret = HITLS_Accept(server->ssl);
+    ASSERT_TRUE(ret == HITLS_REC_NORMAL_RECV_BUF_EMPTY || ret == HITLS_REC_NORMAL_IO_BUSY);
+
+    /* The TLS1.2 ServerHello arrives: the client MUST fail the connection (the fatal alert
+     * may need a few rounds to flush behind the queued CCS on the one-message transport) */
+    ASSERT_EQ(FRAME_TrasferMsgBetweenLink(server, client), HITLS_SUCCESS);
+    ret = HITLS_Connect(client->ssl);
+    for (int32_t i = 0; ret == HITLS_REC_NORMAL_IO_BUSY && i < 5; i++) {
+        (void)FRAME_TrasferMsgBetweenLink(client, server);
+        ret = HITLS_Connect(client->ssl);
+    }
+    /* The connection is dead: the immediate call reports the early-data error, a later call
+     * (after the fatal alert drained on the busy transport) the alerted-link state */
+    ASSERT_TRUE(ret == HITLS_MSG_HANDLE_ILLEGAL_EARLY_DATA || ret == HITLS_CM_LINK_FATAL_ALERTED);
+
+EXIT:
+    HITLS_CFG_FreeConfig(config);
+    HITLS_CFG_FreeConfig(mixedConfig);
+    HITLS_CFG_FreeConfig(tls12Config);
+    FRAME_FreeLink(client);
+    FRAME_FreeLink(server);
+    HITLS_SESS_Free(session);
+}
+/* END_CASE */
+
+/** @
+* @test     UT_TLS13_EARLY_DATA_REPLAY_FUNC_TC001
+* @title    TLS1.3 0-RTT anti-replay: a replayed ClientHello is not accepted twice.
+* @brief    1. Establish a 0-RTT-capable session. Expect result 1.
+*           2. Send a 0-RTT ClientHello to one server and replay the identical bytes to a
+*              second server sharing the same configuration. Expect result 2.
+* @expect   1. Session prepared.
+*           2. The first server accepts the early data; the second rejects the replayed offer
+*              (per-instance at-most-once, RFC 8446 section 8).
+@ */
+/* BEGIN_CASE */
+void UT_TLS13_EARLY_DATA_REPLAY_FUNC_TC001(void)
+{
+    FRAME_Init();
+    HITLS_Config *config = NewEarlyDataTls13Config(EARLY_DATA_TEST_MAX);
+    FRAME_LinkObj *client = NULL;
+    FRAME_LinkObj *server = NULL;
+    FRAME_LinkObj *server2 = NULL;
+    HITLS_Session *session = NULL;
+    uint8_t chCopy[4096] = {0};
+    uint8_t scratch[256] = {0};
+    uint32_t scratchLen = 0;
+    uint32_t writtenLen = 0;
+    uint32_t status = HITLS_EARLY_DATA_NOT_SENT;
+    ASSERT_TRUE(config != NULL);
+    ASSERT_EQ(EarlyDataPrepareSession(config, config, &session), HITLS_SUCCESS);
+
+    client = FRAME_CreateLink(config, BSL_UIO_TCP);
+    server = FRAME_CreateLink(config, BSL_UIO_TCP);
+    server2 = FRAME_CreateLink(config, BSL_UIO_TCP);
+    ASSERT_TRUE(client != NULL && server != NULL && server2 != NULL);
+    ASSERT_EQ(HITLS_SetSession(client->ssl, session), HITLS_SUCCESS);
+
+    /* The first call flushes the ClientHello; capture the exact bytes for the replay */
+    ASSERT_EQ(HITLS_WriteEarlyData(client->ssl, g_earlyPayload, sizeof(g_earlyPayload), &writtenLen),
+        HITLS_REC_NORMAL_IO_BUSY);
+    FrameUioUserData *cUd = BSL_UIO_GetUserData(client->io);
+    ASSERT_TRUE(cUd != NULL && cUd->sndMsg.len > 0 && cUd->sndMsg.len <= sizeof(chCopy));
+    uint32_t chLen = cUd->sndMsg.len;
+    memcpy(chCopy, cUd->sndMsg.msg, chLen);
+
+    /* First server processes the original ClientHello and accepts the offer */
+    ASSERT_EQ(FRAME_TrasferMsgBetweenLink(client, server), HITLS_SUCCESS);
+    int32_t ret = EarlyDataDrainServer(server, scratch, sizeof(scratch), &scratchLen);
+    ASSERT_TRUE(EarlyDataDrainTolerable(ret));
+    ASSERT_EQ(HITLS_GetEarlyDataStatus(server->ssl, &status), HITLS_SUCCESS);
+    ASSERT_EQ(status, HITLS_EARLY_DATA_ACCEPTED);
+
+    /* Replay the identical ClientHello: the shared replay store must refuse a second accept */
+    ASSERT_EQ(FRAME_TransportRecMsg(server2->io, chCopy, chLen), HITLS_SUCCESS);
+    scratchLen = 0;
+    ret = EarlyDataDrainServer(server2, scratch, sizeof(scratch), &scratchLen);
+    ASSERT_TRUE(EarlyDataDrainTolerable(ret));
+    ASSERT_EQ(scratchLen, 0);
+    ASSERT_EQ(HITLS_GetEarlyDataStatus(server2->ssl, &status), HITLS_SUCCESS);
+    ASSERT_EQ(status, HITLS_EARLY_DATA_REJECTED);
+
+EXIT:
+    HITLS_CFG_FreeConfig(config);
+    FRAME_FreeLink(client);
+    FRAME_FreeLink(server);
+    FRAME_FreeLink(server2);
+    HITLS_SESS_Free(session);
+}
+/* END_CASE */
+
+/** @
 * @test     UT_DTLS13_EARLY_DATA_ACCEPT_FUNC_TC001
 * @title    DTLS1.3 0-RTT accept: early data flows at epoch 1 without EndOfEarlyData.
 * @brief    1. Full DTLS1.3 handshake with 0-RTT enabled; take the session. Expect result 1.

@@ -151,6 +151,38 @@ TLS_SessionMgr *SESSMGR_New(HITLS_Lib_Ctx *libCtx)
     return mgr;
 }
 
+#ifdef HITLS_TLS_FEATURE_EARLY_DATA
+bool SESSMGR_EarlyDataAntiReplayCheck(TLS_SessionMgr *mgr, const uint8_t *id, uint32_t idLen,
+    uint64_t nowSec, uint64_t holdSec)
+{
+    if (mgr == NULL || id == NULL || idLen == 0) {
+        /* Uniqueness cannot be established: refuse 0-RTT rather than risk a replay */
+        return false;
+    }
+    uint8_t key[SESSMGR_EARLY_REPLAY_ID_SIZE] = {0};
+    uint32_t copyLen = (idLen < SESSMGR_EARLY_REPLAY_ID_SIZE) ? idLen : SESSMGR_EARLY_REPLAY_ID_SIZE;
+    (void)memcpy(key, id, copyLen);
+
+    bool fresh = true;
+    BSL_SAL_ThreadWriteLock(mgr->lock);
+    for (uint32_t i = 0; i < SESSMGR_EARLY_REPLAY_SLOTS; i++) {
+        if (mgr->earlyReplay[i].expireSec > nowSec &&
+            memcmp(mgr->earlyReplay[i].id, key, SESSMGR_EARLY_REPLAY_ID_SIZE) == 0) {
+            fresh = false;
+            break;
+        }
+    }
+    if (fresh) {
+        uint32_t slot = mgr->earlyReplayNext % SESSMGR_EARLY_REPLAY_SLOTS;
+        (void)memcpy(mgr->earlyReplay[slot].id, key, SESSMGR_EARLY_REPLAY_ID_SIZE);
+        mgr->earlyReplay[slot].expireSec = nowSec + holdSec;
+        mgr->earlyReplayNext = slot + 1;
+    }
+    BSL_SAL_ThreadUnlock(mgr->lock);
+    return fresh;
+}
+#endif /* HITLS_TLS_FEATURE_EARLY_DATA */
+
 /* Copy the number of references. The number of references increases by 1 */
 TLS_SessionMgr *SESSMGR_Dup(TLS_SessionMgr *mgr)
 {

@@ -2597,19 +2597,23 @@ static int32_t UpdateServerBaseKeyExMode(TLS_Ctx *ctx)
  * that still bounds the replay window. */
 #define TLS13_EARLY_DATA_AGE_WINDOW_MS 10000u
 
-static bool Tls13ServerCheckTicketAge(TLS_Ctx *ctx, const ClientHelloMsg *clientHello)
+static const PreSharedKey *Tls13ServerSelectedPsk(const ClientHelloMsg *clientHello)
 {
-    const PreSharedKey *selected = NULL;
     ListHead *node = NULL;
     ListHead *tmpNode = NULL;
     PreSharedKey *offeredPsks = clientHello->extension.content.preSharedKey;
     LIST_FOR_EACH_ITEM_SAFE(node, tmpNode, &(offeredPsks->pskNode)) {
         PreSharedKey *cur = BSL_LIST_ENTRY(node, PreSharedKey, pskNode);
         if (cur->isValid) {
-            selected = cur;
-            break;
+            return cur;
         }
     }
+    return NULL;
+}
+
+static bool Tls13ServerCheckTicketAge(TLS_Ctx *ctx, const ClientHelloMsg *clientHello)
+{
+    const PreSharedKey *selected = Tls13ServerSelectedPsk(clientHello);
     if (selected == NULL) {
         return false;
     }
@@ -2699,6 +2703,17 @@ static int32_t Tls13ServerAcceptEarlyData(TLS_Ctx *ctx, const ClientHelloMsg *cl
     }
 
     if (!Tls13ServerCheckTicketAge(ctx, clientHello)) {
+        return HITLS_SUCCESS;
+    }
+
+    /* rfc 8446 8: this instance must accept the same 0-RTT handshake at most once. The PSK
+     * binder is unique per ClientHello, so recording accepted binders for the freshness window
+     * (with margin) detects replays; a duplicate falls back to 1-RTT. */
+    const PreSharedKey *selectedPsk = Tls13ServerSelectedPsk(clientHello);
+    uint64_t nowSec = (uint64_t)BSL_SAL_CurrentSysTimeGet();
+    if (selectedPsk == NULL || ctx->globalConfig == NULL ||
+        !SESSMGR_EarlyDataAntiReplayCheck(ctx->globalConfig->sessMgr, selectedPsk->binder,
+            selectedPsk->binderSize, nowSec, (TLS13_EARLY_DATA_AGE_WINDOW_MS / 1000u) * 3u)) {
         return HITLS_SUCCESS;
     }
 

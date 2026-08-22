@@ -142,24 +142,30 @@ int32_t HITLS_WriteEarlyData(HITLS_Ctx *ctx, const uint8_t *data, uint32_t dataL
     }
 
     RecCtx *recCtx = (RecCtx *)ctx->recCtx;
-#ifdef HITLS_TLS_FEATURE_FLIGHT
     if (ctx->earlyPendingData != NULL) {
-        /* A previous call already encrypted this data into the flight buffer and only the
-         * transport flush failed; re-encrypting on retry would put a second copy on the wire.
-         * Complete the write flush-only, regardless of how far the handshake moved on. */
+        /* A previous call already encrypted this data into the record out-buffer or the flight
+         * buffer and only the transport flush failed; re-encrypting on retry would put a second
+         * copy on the wire. Complete the write flush-only, regardless of how far the handshake
+         * moved on (the bytes were already accounted when they were staged). */
         if (ctx->earlyPendingData != data || ctx->earlyPendingLen > dataLen) {
             BSL_ERR_PUSH_ERROR(HITLS_APP_ERR_WRITE_BAD_RETRY);
             return HITLS_APP_ERR_WRITE_BAD_RETRY;
         }
-        int32_t flushRet = REC_FlightTransmit(ctx);
+        int32_t flushRet = REC_OutBufFlush(ctx);
+#ifdef HITLS_TLS_FEATURE_FLIGHT
+        if (flushRet == HITLS_SUCCESS && ctx->config.tlsConfig.isFlightTransmitEnable) {
+            flushRet = REC_FlightTransmit(ctx);
+        }
+#endif
         if (flushRet != HITLS_SUCCESS) {
             return flushRet;
         }
         *writeLen = ctx->earlyPendingLen;
         REC_ClearPendingAppData(ctx);
+        ctx->earlyPendingData = NULL;
+        ctx->earlyPendingLen = 0;
         return HITLS_SUCCESS;
     }
-#endif
 
     if (!ClientCanWriteEarlyData(ctx)) {
         BSL_ERR_PUSH_ERROR(HITLS_MSG_HANDLE_EARLY_DATA_NOT_ALLOWED);
@@ -204,24 +210,21 @@ int32_t HITLS_WriteEarlyData(HITLS_Ctx *ctx, const uint8_t *data, uint32_t dataL
         return HITLS_SUCCESS;
     }
     *writeLen = 0;
-#ifdef HITLS_TLS_FEATURE_FLIGHT
-    /* Datagram transports drop the record on a busy transport (the retry re-encrypts), so
-     * "empty out-buffer" means nothing was staged there; staging only exists for a stream
-     * transport whose flight buffer holds the encrypted record. */
-    if (ret == HITLS_REC_NORMAL_IO_BUSY && ctx->config.tlsConfig.isFlightTransmitEnable &&
-        !IS_SUPPORT_DATAGRAM(ctx->config.tlsConfig.originVersionMask)) {
-        RecBuf *outBuf = recCtx->outBuf;
-        if (outBuf == NULL || outBuf->start == outBuf->end) {
-            /* The record left the record layer into the flight buffer, so it WILL reach the
-             * wire with the next successful flush: account for it now and remember that the
-             * retry must be completed flush-only. */
-            uint32_t stagedLen = (recCtx->pendingDataSize != 0) ? recCtx->pendingDataSize : attemptLen;
-            ctx->earlyPendingData = data;
-            ctx->earlyPendingLen = stagedLen;
-            ctx->earlyDataWritten += stagedLen;
-        }
-    }
+    /* Stream transports retain the encrypted record (out-buffer or flight buffer) on a busy
+     * transport, so it WILL reach the wire with the next successful flush, no matter who
+     * flushes: account for it now and remember that the retry must be completed flush-only.
+     * Datagram transports drop the record instead (the retry re-encrypts), so nothing is
+     * staged for them. */
+    if (ret == HITLS_REC_NORMAL_IO_BUSY && recCtx->pendingData == data
+#ifdef HITLS_TLS_PROTO_DTLS
+        && !IS_SUPPORT_DATAGRAM(ctx->config.tlsConfig.originVersionMask)
 #endif
+    ) {
+        uint32_t stagedLen = (recCtx->pendingDataSize != 0) ? recCtx->pendingDataSize : attemptLen;
+        ctx->earlyPendingData = data;
+        ctx->earlyPendingLen = stagedLen;
+        ctx->earlyDataWritten += stagedLen;
+    }
     return ret;
 }
 
@@ -264,6 +267,13 @@ int32_t HITLS_ReadEarlyData(HITLS_Ctx *ctx, uint8_t *data, uint32_t bufSize, uin
     if (phaseActive && ctx->negotiatedInfo.version == HITLS_VERSION_TLS13 &&
         ctx->hsCtx != NULL && ctx->hsCtx->state == TRY_RECV_FINISH) {
         phaseActive = false;
+    }
+
+    /* Once the phase is over, only records buffered DURING the phase may still be delivered;
+     * reading fresh records here would hand pipelined 1-RTT data out through the early-data
+     * API and misapply the early-data limit to it. */
+    if (!phaseActive && RecBufListEmpty(((RecCtx *)ctx->recCtx)->appRecList)) {
+        return HITLS_READ_EARLY_DATA_FINISH;
     }
 
     uint32_t got = 0;

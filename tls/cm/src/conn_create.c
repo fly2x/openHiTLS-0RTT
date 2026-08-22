@@ -272,6 +272,7 @@ int32_t HITLS_Clear(HITLS_Ctx *ctx)
     ctx->earlyDataState = TLS_EARLY_DATA_NOT_SENT;
     ctx->earlyDataWritten = 0;
     ctx->earlyDataRead = 0;
+    ctx->earlyDataBuffered = 0;
     ctx->earlyPendingData = NULL;
     ctx->earlyPendingLen = 0;
     ctx->earlyDataIntent = false;
